@@ -1,9 +1,13 @@
+# master_pipeline.py
+
+# --- Imports ---
+import os
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import dask.dataframe as dd
 import sqlite3
 import chardet
-import os
 
 # --- LLM Provider Wrapper ---
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "huggingface")
@@ -50,10 +54,15 @@ def load_data(uploaded_file):
     try:
         if filename.endswith((".csv", ".txt")):
             raw_bytes = uploaded_file.read()
-            result = chardet.detect(raw_bytes)
-            encoding = result["encoding"] if result["encoding"] else "utf-8"
+            size_mb = len(raw_bytes) / (1024*1024)
             uploaded_file.seek(0)
-            df = pd.read_csv(uploaded_file, encoding=encoding, low_memory=False)
+            if size_mb > 100:  # threshold for large files
+                df = dd.read_csv(uploaded_file)
+                df = df.compute()  # convert to Pandas for downstream functions
+            else:
+                result = chardet.detect(raw_bytes)
+                encoding = result["encoding"] if result["encoding"] else "utf-8"
+                df = pd.read_csv(uploaded_file, encoding=encoding, low_memory=False)
         elif filename.endswith((".xlsx", ".xls")):
             df = pd.read_excel(uploaded_file)
         elif filename.endswith(".xml"):
@@ -188,9 +197,4 @@ def generate_numeric_questions(df):
     sample = df.head(3).to_dict()
     prompt = f"""
     You are a corporate data analyst. The dataset has columns: {schema}.
-    Sample rows: {sample}.
-    Generate 5 insightful numeric questions (averages, totals, YoY comparisons).
-    Return them as a simple numbered list.
-    """
-    questions_text = query_llm(prompt)
-    questions = [q.strip("1234567890. ") for q in questions_text.split("\n") if q.strip()]
+    Sample rows
