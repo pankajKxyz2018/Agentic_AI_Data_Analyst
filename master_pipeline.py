@@ -194,8 +194,3 @@ def generate_numeric_questions(df):
     """
     questions_text = query_llm(prompt)
     questions = [q.strip("1234567890. ") for q in questions_text.split("\n") if q.strip()]
-
-
-
-
-
