@@ -184,70 +184,75 @@ def clean_data(df):
 
 # ─── Column Detector ─────────────────────────────────────────────────────────
 def detect_columns(df):
-    """
-    Robust column detection using:
-    1. Exact normalised match (strip, lower, collapse spaces)
-    2. Keyword-contains match (column name contains the keyword)
-    3. Numeric-type fallback for known numeric fields
-    """
-    # normalise: lower + collapse all whitespace/underscores to single space
+    """4-pass column detector + aggressive numeric fallback."""
+    import re
     def norm(s):
-        import re
         return re.sub(r'[\s_\-]+', ' ', str(s).lower().strip())
 
-    col_norm = {norm(col): col for col in df.columns}   # normalised → original
-    found = {}
+    col_norm  = {norm(c): c for c in df.columns}
+    num_cols  = df.select_dtypes(include="number").columns.tolist()
+    found     = {}
 
-    # Priority-ordered synonym lists.  First match wins.
+    # ── Synonym maps (priority-ordered, first match wins) ──────────────────
     maps = {
-        "date":        ["order date","ship date","transaction date","sale date","invoice date",
-                        "created date","purchase date","orderdate","shipdate","date","time",
-                        "order month","month","year","period","fiscal date","trans date"],
-        "sales":       ["sales","revenue","total price","total sales","net sales","sale amount",
-                        "gross sales","total revenue","order value","net revenue","totalprice",
-                        "total amount","amount","gross revenue","invoice amount","selling price",
-                        "sales amount","order total","transaction amount"],
-        "profit":      ["profit","net profit","gross profit","operating profit","earnings",
-                        "net income","income","ebit","ebitda"],
-        "product":     ["product name","product","item name","item","sku","product title",
-                        "product description","sub category","sub-category","productname",
-                        "product id","product code","goods","merchandise","article"],
+        "date":        ["order date","order_date","transaction date","sale date",
+                        "invoice date","created date","purchase date","shipdate",
+                        "ship date","date","period","fiscal date","trans date",
+                        "order month","month"],
+        "sales":       ["sales","revenue","total revenue","net revenue","gross revenue",
+                        "total sales","net sales","gross sales","sale amount","total price",
+                        "totalprice","order value","order total","invoice amount",
+                        "transaction amount","total amount","amount","net amount",
+                        "selling price","sales amount","turnover","income"],
+        "profit":      ["profit","net profit","gross profit","operating profit",
+                        "net income","earnings","ebit","ebitda","margin amount"],
+        "product":     ["product name","productname","product title","product",
+                        "item name","item","sku","product code","product id",
+                        "goods","merchandise","article","product description"],
+        "sub_category":["sub category","sub-category","subcategory",
+                        "product sub category","sub cat"],
         "category":    ["category","product category","product group","product type",
-                        "segment","type","department","class","brand","line"],
+                        "product class","brand","class","line"],
         "region":      ["region","territory","area","zone","market","geography"],
         "city":        ["city","town","municipality"],
         "state":       ["state","province","county"],
-        "country":     ["country","nation","country code"],
-        "quantity":    ["quantity","qty","units sold","quantity sold","quantity ordered",
-                        "units","order qty","items sold","volume","no of units","number of units"],
-        "customer":    ["customer name","customer id","customer","client name","client id",
-                        "client","buyer","consumer","account","contact","customerid"],
-        "salary":      ["salary","annual salary","monthly salary","base salary","wage",
-                        "compensation","pay","ctc","total compensation","income"],
-        "spend":       ["spend","ad spend","marketing spend","campaign cost","ad cost",
-                        "budget","marketing budget","media spend","advertising spend"],
-        "channel":     ["channel","marketing channel","ad channel","traffic source",
-                        "source","medium","platform","campaign type","utm source"],
+        "country":     ["country","nation","country code","country name"],
+        "quantity":    ["quantity","qty","units sold","quantity sold",
+                        "quantity ordered","units","order qty","items sold",
+                        "volume","no of units","number of units","count"],
+        "customer":    ["customer name","customer id","customerid","customer",
+                        "client name","client id","client","buyer","consumer",
+                        "account","contact","user"],
+        "salary":      ["salary","annual salary","monthly salary","base salary",
+                        "wage","compensation","pay","ctc","total compensation"],
+        "spend":       ["ad spend","marketing spend","campaign cost","ad cost",
+                        "marketing budget","media spend","advertising spend","spend"],
+        "channel":     ["marketing channel","ad channel","traffic source",
+                        "utm source","campaign type","acquisition channel",
+                        "ad platform","media channel"],
+        "distribution_channel": ["channel","distribution channel","sales channel",
+                        "order channel","purchase channel","buying channel"],
         "discount":    ["discount","discount amount","discount %","discount percent",
                         "promo","rebate","coupon","offer","markdown"],
-        "returns":     ["return status","returned","return","returns","refund","refunded",
-                        "is returned","order status"],
+        "returns":     ["return status","returned","return","returns","refund",
+                        "refunded","is returned"],
         "delivery":    ["delivery time","shipping days","days to ship","lead time",
-                        "fulfillment time","days to deliver","shipping time","transit days"],
+                        "fulfillment time","days to deliver","shipping time",
+                        "transit days","delivery days"],
         "payment":     ["payment method","payment type","payment mode","pay method",
-                        "payment","mode of payment","transaction type"],
+                        "mode of payment","transaction type"],
         "store":       ["store name","store id","store","branch","outlet","shop",
                         "location","point of sale","pos","store location"],
-        "department":  ["department","dept","division","team","function","business unit",
-                        "org unit","cost center"],
+        "department":  ["department","dept","division","team","function",
+                        "business unit","org unit","cost center"],
         "gender":      ["gender","sex","employee gender"],
         "age":         ["age","age group","age band","employee age"],
-        "tenure":      ["tenure","years of service","experience","years at company",
-                        "seniority","service years","employment duration"],
+        "tenure":      ["tenure","years of service","experience",
+                        "years at company","seniority","service years"],
         "attrition":   ["attrition","left company","churn","resigned","turnover",
                         "exit","is churned","employee status","employment status"],
-        "satisfaction":["satisfaction score","satisfaction","rating","nps","csat",
-                        "score","review score","feedback score","star rating"],
+        "satisfaction":["satisfaction score","satisfaction","nps","csat",
+                        "review score","feedback score","star rating","rating"],
         "impressions": ["impressions","impression","views","reach","page views"],
         "clicks":      ["clicks","click","click through","link clicks"],
         "conversions": ["conversions","conversion","leads","sign ups","signups",
@@ -255,77 +260,132 @@ def detect_columns(df):
         "roi":         ["roi","roas","return on investment","return on ad spend"],
         "price":       ["unit price","selling price","list price","mrp","price",
                         "rate","cost price","base price","retail price"],
-        "cost":        ["unit cost","cost of goods","cogs","purchase price","cost",
-                        "product cost","manufacturing cost"],
-        "order_id":    ["order id","order no","orderid","transaction id","invoice id",
-                        "receipt id","order number","invoice number"],
+        "cost":        ["unit cost","cost of goods","cogs","purchase price",
+                        "product cost","manufacturing cost","cost"],
+        "order_id":    ["order id","order no","orderid","transaction id",
+                        "invoice id","receipt id","order number","invoice number"],
+        "ship_mode":   ["ship mode","shipping mode","delivery mode",
+                        "shipment type","ship method","shipping method"],
+        "segment":     ["customer segment","market segment","customer type",
+                        "business segment","user segment"],
         "profit_margin":["profit margin","margin %","gross margin","net margin"],
-        "ship_mode":   ["ship mode","shipping mode","delivery mode","shipment type","ship method"],
-        "segment":     ["segment","customer segment","market segment","customer type"],
-        "sub_category":["sub category","sub-category","subcategory","product sub category"],
     }
 
     # Pass 1: exact normalised match
     for key, synonyms in maps.items():
-        if key in found:
-            continue
+        if key in found: continue
         for s in synonyms:
-            ns = norm(s)
-            if ns in col_norm:
-                found[key] = col_norm[ns]
+            if norm(s) in col_norm:
+                found[key] = col_norm[norm(s)]
                 break
 
-    # Pass 2: contains match — column name *contains* the keyword
-    # (catches "Order Date", "Total Sales", "Product Name" etc.)
+    # Pass 2: contains match (col contains keyword OR keyword contains col)
     for key, synonyms in maps.items():
-        if key in found:
-            continue
+        if key in found: continue
         for col_n, col_orig in col_norm.items():
             for s in synonyms:
                 ns = norm(s)
-                if ns in col_n or col_n in ns:
-                    found[key] = col_orig
-                    break
-            if key in found:
-                break
+                # only match if both sides are at least 4 chars to avoid false positives
+                if len(ns) >= 4 and len(col_n) >= 4:
+                    if ns in col_n or col_n in ns:
+                        found[key] = col_orig
+                        break
+            if key in found: break
 
-    # Pass 3: numeric-type fallback — pick the first numeric column that
-    # *starts with* a recognisable keyword when nothing else matched.
-    num_cols = df.select_dtypes(include="number").columns.tolist()
-    fallback_keywords = {
-        "sales":    ["sale","revenue","amount","total","price"],
-        "profit":   ["profit","earn","income"],
-        "quantity": ["qty","quant","unit","count","volume"],
-        "discount": ["disc","promo"],
-        "salary":   ["salary","wage","pay","comp"],
-        "spend":    ["spend","budget","cost"],
-        "impressions": ["impression","view","reach"],
-        "clicks":   ["click"],
-        "conversions": ["conv","lead"],
+    # Pass 3: aggressive numeric fallback — if sales/profit/qty still missing,
+    # grab the first numeric column matching any keyword fragment
+    num_fallback = {
+        "sales":   ["sale","revenue","amount","total","price","value","turnover","income","gross"],
+        "profit":  ["profit","earn","margin","net","income"],
+        "quantity":["qty","quant","unit","count","volume","sold"],
+        "discount":["disc","promo","rebate","off"],
+        "salary":  ["salary","wage","pay","comp","ctc"],
+        "spend":   ["spend","budget","cost","adcost"],
+        "impressions":["impression","view","reach"],
+        "clicks":  ["click"],
+        "conversions":["conv","lead","goal"],
     }
-    for key, kws in fallback_keywords.items():
-        if key in found:
-            continue
+    for key, kws in num_fallback.items():
+        if key in found: continue
         for col in num_cols:
             cn = norm(col)
-            if any(cn.startswith(k) or k in cn for k in kws):
+            if any(kw in cn for kw in kws):
                 found[key] = col
                 break
 
-    # Pass 4: date fallback — find first datetime column
+    # Pass 4: last-resort — if sales still not found, use largest-sum numeric column
+    if "sales" not in found and num_cols:
+        best_col = max(num_cols, key=lambda c: df[c].sum())
+        found["sales"] = best_col
+
+    # Pass 5: date fallback
     if "date" not in found:
         for col in df.columns:
             if pd.api.types.is_datetime64_any_dtype(df[col]):
-                found["date"] = col
-                break
+                found["date"] = col; break
         if "date" not in found:
             for col in df.columns:
                 cn = norm(col)
                 if any(k in cn for k in ["date","time","month","year","period"]):
-                    found["date"] = col
-                    break
+                    found["date"] = col; break
 
     return found
+
+
+# ─── Domain Detection (SCORING-BASED) ────────────────────────────────────────
+def detect_domain(df, found):
+    """Score each domain; highest score wins. Prevents single-column misclassification."""
+    keys = set(found.keys())
+    h    = " ".join(df.columns).lower()
+    scores = {"Sales": 0, "Marketing": 0, "HR": 0, "Ecommerce": 0, "Retail": 0}
+
+    # Sales signals
+    if "sales"   in keys: scores["Sales"] += 3
+    if "profit"  in keys: scores["Sales"] += 3
+    if "product" in keys: scores["Sales"] += 2
+    if "quantity"in keys: scores["Sales"] += 2
+    if "discount"in keys: scores["Sales"] += 1
+    if "customer"in keys: scores["Sales"] += 1
+    if any(k in h for k in ["order","invoice","sales","revenue","profit"]): scores["Sales"] += 2
+
+    # Marketing signals — require MULTIPLE marketing-specific cols, not just "channel"
+    if "impressions" in keys: scores["Marketing"] += 4
+    if "clicks"      in keys: scores["Marketing"] += 4
+    if "conversions" in keys: scores["Marketing"] += 3
+    if "channel"     in keys: scores["Marketing"] += 3  # pure marketing channel
+    if "spend"       in keys: scores["Marketing"] += 3
+    if "roi"         in keys: scores["Marketing"] += 3
+    if any(k in h for k in ["campaign","ctr","cpm","roas","ad spend","utm"]): scores["Marketing"] += 3
+    # "distribution_channel" is NOT a Marketing signal
+    if "distribution_channel" in keys and "impressions" not in keys and "clicks" not in keys:
+        scores["Marketing"] -= 2  # penalise false marketing classification
+
+    # HR signals
+    if "salary"     in keys: scores["HR"] += 4
+    if "attrition"  in keys: scores["HR"] += 4
+    if "department" in keys: scores["HR"] += 3
+    if "tenure"     in keys: scores["HR"] += 3
+    if "gender"     in keys: scores["HR"] += 2
+    if "age"        in keys: scores["HR"] += 2
+    if any(k in h for k in ["employee","headcount","appraisal","payroll","hire"]): scores["HR"] += 3
+
+    # Ecommerce signals
+    if "delivery"in keys: scores["Ecommerce"] += 4
+    if "returns" in keys: scores["Ecommerce"] += 4
+    if "payment" in keys: scores["Ecommerce"] += 3
+    if "customer"in keys: scores["Ecommerce"] += 1
+    if any(k in h for k in ["cart","checkout","ecommerce","e-commerce","wishlist","tracking"]): scores["Ecommerce"] += 4
+
+    # Retail signals
+    if "store"  in keys: scores["Retail"] += 5
+    if any(k in h for k in ["store","retail","pos","point of sale","branch","outlet","franchise"]): scores["Retail"] += 4
+
+    winner = max(scores, key=scores.get)
+    # Must beat Generic threshold
+    if scores[winner] < 2:
+        return "Generic"
+    return winner
+
 
 # ─── Domain Detection ────────────────────────────────────────────────────────
 def detect_domain(df, found):
@@ -1418,11 +1478,11 @@ def main():
         st.error("❌ Failed to load. Please check file format.")
         return
 
-    df = clean_data(df)
+    df     = clean_data(df)
     found  = detect_columns(df)
     domain = detect_domain(df, found)
-    accent = DOMAIN_COLOR.get(domain, "#94a3b8")
 
+    # ── Detection banner ──────────────────────────────────────────────────
     badge_class = f"badge-{domain.lower()}"
     st.markdown(
         f'<span class="domain-badge {badge_class}">🎯 {domain}</span> &nbsp; '
@@ -1432,14 +1492,64 @@ def main():
         f'</span>', unsafe_allow_html=True
     )
 
+    # ── Manual Override Panel ─────────────────────────────────────────────
+    with st.expander("⚙️ Column & Domain Override (click if charts are missing)", expanded=False):
+        st.markdown("**If the domain or columns were mis-detected, override them here:**")
+        all_cols   = ["— (not mapped) —"] + list(df.columns)
+        num_cols_l = ["— (not mapped) —"] + df.select_dtypes(include="number").columns.tolist()
+
+        oc1, oc2 = st.columns(2)
+        with oc1:
+            domain = st.selectbox("🎯 Domain", ["Sales","Marketing","HR","Ecommerce","Retail","Generic"],
+                                  index=["Sales","Marketing","HR","Ecommerce","Retail","Generic"].index(domain))
+        with oc2:
+            st.markdown(" ")
+
+        st.markdown("**Map key columns** *(auto-detected values shown as defaults)*:")
+        key_fields = {
+            "sales":    ("💰 Revenue / Sales column",  num_cols_l),
+            "profit":   ("🏆 Profit column",           num_cols_l),
+            "quantity": ("📦 Quantity / Units column", num_cols_l),
+            "discount": ("🏷 Discount column",         num_cols_l),
+            "date":     ("📅 Date column",             all_cols),
+            "product":  ("🛒 Product column",          all_cols),
+            "category": ("🗂 Category column",         all_cols),
+            "region":   ("🌍 Region column",           all_cols),
+            "customer": ("👥 Customer column",         all_cols),
+        }
+        r1c = st.columns(3)
+        for i, (key, (label, options)) in enumerate(key_fields.items()):
+            current = found.get(key, "— (not mapped) —")
+            default_idx = options.index(current) if current in options else 0
+            chosen = r1c[i % 3].selectbox(label, options, index=default_idx, key=f"ovr_{key}")
+            if chosen != "— (not mapped) —":
+                found[key] = chosen
+            elif key in found and chosen == "— (not mapped) —":
+                del found[key]
+
+        st.markdown("---")
+        st.markdown("**All detected column mappings:**")
+        det_df = pd.DataFrame({"Key": list(found.keys()), "Mapped to": list(found.values())})
+        st.dataframe(det_df, use_container_width=True, hide_index=True)
+
+        st.markdown("**All dataset columns & types:**")
+        type_df = pd.DataFrame({
+            "Column": df.columns,
+            "Type":   [str(df[c].dtype) for c in df.columns],
+            "Sample": [str(df[c].dropna().iloc[0]) if len(df[c].dropna()) > 0 else "" for c in df.columns],
+            "Non-null": [df[c].notna().sum() for c in df.columns],
+        })
+        st.dataframe(type_df, use_container_width=True, hide_index=True)
+
+    # ── Data preview ──────────────────────────────────────────────────────
     with st.expander("🔍 Preview Raw Data"):
         st.dataframe(df.head(50), use_container_width=True)
         st.caption(f"Showing first 50 of {len(df):,} rows · {len(df.columns)} columns")
 
-    # KPIs always first
+    # ── KPIs ──────────────────────────────────────────────────────────────
     render_kpis(df, found, domain)
 
-    # Domain routing
+    # ── Domain routing ────────────────────────────────────────────────────
     if domain == "Sales":
         render_sales(df, found)
     elif domain == "Marketing":
@@ -1453,7 +1563,6 @@ def main():
     else:
         render_generic(df, found)
 
-    # Always render summary + AI Q&A
     render_summary(df, found, domain)
     render_llm_qa(df, domain, found)
 
