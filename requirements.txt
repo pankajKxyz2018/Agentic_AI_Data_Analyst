@@ -13,7 +13,3 @@ anthropic==0.21.3
 cohere==4.37
 transformers==4.36.2
 torch==2.2.0
-```
-
-
-
