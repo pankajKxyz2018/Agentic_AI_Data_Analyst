@@ -48,6 +48,7 @@ h1, h2, h3 { font-family: 'Syne', sans-serif !important; }
 .badge-ecommerce  { background:#34d39922; color:#34d399; border:1px solid #34d39944; }
 .badge-retail     { background:#fbbf2422; color:#fbbf24; border:1px solid #fbbf2444; }
 .badge-generic    { background:#94a3b822; color:#94a3b8; border:1px solid #94a3b844; }
+.badge-fraud      { background:#ff6b6b22; color:#ff6b6b; border:1px solid #ff6b6b44; }
 
 .section-header {
     background: linear-gradient(90deg, #ffffff0a, transparent);
@@ -114,6 +115,7 @@ DOMAIN_COLOR = {
     "Ecommerce": C_GREEN,
     "Retail":    C_YELLOW,
     "Generic":   "#94a3b8",
+    "Fraud":     "#ff6b6b",
 }
 
 # ─── LLM ─────────────────────────────────────────────────────────────────────
@@ -143,33 +145,79 @@ def query_llm(prompt):
 
 # ─── Data Loader ─────────────────────────────────────────────────────────────
 def load_data(uploaded_file):
+    import io, tempfile, os
     fname = uploaded_file.name.lower()
     try:
+        # Always read raw bytes first — avoids ALL UploadedFile compatibility issues
+        raw_bytes = uploaded_file.read()
+        uploaded_file.seek(0)
+        size_mb = len(raw_bytes) / 1024**2
+
         if fname.endswith((".csv", ".txt")):
-            raw = uploaded_file.read()
-            uploaded_file.seek(0)
-            if len(raw) / 1024**2 > 100:
-                return dd.read_csv(uploaded_file).compute()
-            enc = chardet.detect(raw).get("encoding") or "utf-8"
-            return pd.read_csv(uploaded_file, encoding=enc, low_memory=False)
+            enc = chardet.detect(raw_bytes).get("encoding") or "utf-8"
+            if enc.lower() in ["ascii", "utf-8", "utf8"]:
+                enc = "utf-8"
+            buf = io.BytesIO(raw_bytes)
+
+            if size_mb > 100:
+                # Dask needs a real file path — save to temp file
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+                    tmp.write(raw_bytes)
+                    tmp_path = tmp.name
+                try:
+                    df = dd.read_csv(tmp_path, encoding=enc).compute()
+                finally:
+                    os.unlink(tmp_path)
+                return df
+            else:
+                return pd.read_csv(buf, encoding=enc, low_memory=False)
+
         elif fname.endswith((".xlsx", ".xls")):
-            return pd.read_excel(uploaded_file)
+            return pd.read_excel(io.BytesIO(raw_bytes))
+
         elif fname.endswith(".xml"):
-            return pd.read_xml(uploaded_file)
+            return pd.read_xml(io.BytesIO(raw_bytes))
+
         elif fname.endswith((".html", ".htm")):
-            return pd.read_html(uploaded_file)[0]
+            return pd.read_html(io.BytesIO(raw_bytes))[0]
+
         elif fname.endswith(".pdf"):
             import tabula
-            dfs = tabula.read_pdf(uploaded_file, pages="all", multiple_tables=True)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(raw_bytes)
+                tmp_path = tmp.name
+            try:
+                dfs = tabula.read_pdf(tmp_path, pages="all", multiple_tables=True)
+            finally:
+                os.unlink(tmp_path)
             return dfs[0] if dfs else None
+
         elif fname.endswith((".db", ".sqlite")):
-            conn = sqlite3.connect(uploaded_file.name)
-            df = pd.read_sql_query("SELECT * FROM my_table", conn)
-            conn.close()
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp:
+                tmp.write(raw_bytes)
+                tmp_path = tmp.name
+            try:
+                conn = sqlite3.connect(tmp_path)
+                tables = pd.read_sql_query(
+                    "SELECT name FROM sqlite_master WHERE type='table'", conn
+                )
+                if tables.empty:
+                    conn.close()
+                    return None
+                first_table = tables["name"].iloc[0]
+                df = pd.read_sql_query(f"SELECT * FROM '{first_table}'", conn)
+                conn.close()
+            finally:
+                os.unlink(tmp_path)
             return df
+
+        else:
+            st.error(f"Unsupported file type: {fname}")
+            return None
+
     except Exception as e:
         st.error(f"Load error: {e}")
-    return None
+        return None
 
 # ─── Clean ────────────────────────────────────────────────────────────────────
 def clean_data(df):
@@ -332,14 +380,35 @@ def detect_columns(df):
     return found
 
 
+# ─── Fraud Dataset Detection ─────────────────────────────────────────────────
+def is_fraud_dataset(df):
+    cols_lower = [c.lower().strip() for c in df.columns]
+    fraud_label_cols = ["class","label","fraud","is_fraud","isfraud","target","is fraud"]
+    has_class = any(c in cols_lower for c in fraud_label_cols)
+    if not has_class:
+        return False
+    v_cols = sum(1 for c in cols_lower if len(c) > 1 and c[0] == "v" and c[1:].isdigit())
+    has_amount = "amount" in cols_lower
+    has_time   = "time" in cols_lower
+    for col in df.columns:
+        if col.lower().strip() in fraud_label_cols:
+            unique_vals = set(df[col].dropna().unique())
+            is_binary = unique_vals.issubset({0,1,"0","1",True,False,"yes","no","fraud","legitimate"})
+            if is_binary and (v_cols >= 3 or (has_amount and has_time)):
+                return True
+    return False
+
+
 # ─── Domain Detection (SCORING-BASED) ────────────────────────────────────────
 def detect_domain(df, found):
-    """Score each domain; highest score wins. Prevents single-column misclassification."""
+    """Score each domain; highest score wins."""
+    if is_fraud_dataset(df):
+        return "Fraud"
+
     keys = set(found.keys())
     h    = " ".join(df.columns).lower()
     scores = {"Sales": 0, "Marketing": 0, "HR": 0, "Ecommerce": 0, "Retail": 0}
 
-    # Sales signals
     if "sales"   in keys: scores["Sales"] += 3
     if "profit"  in keys: scores["Sales"] += 3
     if "product" in keys: scores["Sales"] += 2
@@ -348,44 +417,37 @@ def detect_domain(df, found):
     if "customer"in keys: scores["Sales"] += 1
     if any(k in h for k in ["order","invoice","sales","revenue","profit"]): scores["Sales"] += 2
 
-    # Marketing signals — require MULTIPLE marketing-specific cols, not just "channel"
     if "impressions" in keys: scores["Marketing"] += 4
     if "clicks"      in keys: scores["Marketing"] += 4
     if "conversions" in keys: scores["Marketing"] += 3
-    if "channel"     in keys: scores["Marketing"] += 3  # pure marketing channel
+    if "channel"     in keys: scores["Marketing"] += 3
     if "spend"       in keys: scores["Marketing"] += 3
     if "roi"         in keys: scores["Marketing"] += 3
     if any(k in h for k in ["campaign","ctr","cpm","roas","ad spend","utm"]): scores["Marketing"] += 3
-    # "distribution_channel" is NOT a Marketing signal
     if "distribution_channel" in keys and "impressions" not in keys and "clicks" not in keys:
-        scores["Marketing"] -= 2  # penalise false marketing classification
+        scores["Marketing"] -= 2
 
-    # HR signals
-    if "salary"     in keys: scores["HR"] += 4
-    if "attrition"  in keys: scores["HR"] += 4
-    if "department" in keys: scores["HR"] += 3
-    if "tenure"     in keys: scores["HR"] += 3
-    if "gender"     in keys: scores["HR"] += 2
-    if "age"        in keys: scores["HR"] += 2
+    if "salary"    in keys: scores["HR"] += 4
+    if "attrition" in keys: scores["HR"] += 4
+    if "department"in keys: scores["HR"] += 3
+    if "tenure"    in keys: scores["HR"] += 3
+    if "gender"    in keys: scores["HR"] += 2
+    if "age"       in keys: scores["HR"] += 2
     if any(k in h for k in ["employee","headcount","appraisal","payroll","hire"]): scores["HR"] += 3
 
-    # Ecommerce signals
     if "delivery"in keys: scores["Ecommerce"] += 4
     if "returns" in keys: scores["Ecommerce"] += 4
     if "payment" in keys: scores["Ecommerce"] += 3
     if "customer"in keys: scores["Ecommerce"] += 1
     if any(k in h for k in ["cart","checkout","ecommerce","e-commerce","wishlist","tracking"]): scores["Ecommerce"] += 4
 
-    # Retail signals
-    if "store"  in keys: scores["Retail"] += 5
+    if "store" in keys: scores["Retail"] += 5
     if any(k in h for k in ["store","retail","pos","point of sale","branch","outlet","franchise"]): scores["Retail"] += 4
 
     winner = max(scores, key=scores.get)
-    # Must beat Generic threshold
     if scores[winner] < 2:
         return "Generic"
     return winner
-
 
 # ─── Domain Detection ────────────────────────────────────────────────────────
 def detect_domain(df, found):
@@ -1224,6 +1286,163 @@ def render_generic(df, found):
     render_kpis(df, found, d)
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  DOMAIN: FRAUD DETECTION
+# ══════════════════════════════════════════════════════════════════════════════
+def render_fraud(df, found):
+    d = "Fraud"
+    C_FRAUD = "#ff6b6b"
+
+    # Identify key columns
+    cols_lower = {c.lower().strip(): c for c in df.columns}
+    fraud_label_cols = ["class","label","fraud","is_fraud","isfraud","target","is fraud"]
+    class_col = next((cols_lower[c] for c in fraud_label_cols if c in cols_lower), None)
+    amount_col = cols_lower.get("amount")
+    time_col   = cols_lower.get("time")
+    v_cols     = [c for c in df.columns if c.lower().startswith("v") and c[1:].isdigit()]
+
+    if class_col is None:
+        st.warning("Could not find fraud label column (Class/Label/Fraud).")
+        return
+
+    df2 = df.copy()
+    # Normalise class labels to 0/1
+    df2["_label"] = df2[class_col].astype(str).str.lower().map(
+        lambda x: 1 if x in ["1","true","yes","fraud"] else 0
+    )
+    total      = len(df2)
+    fraud_ct   = df2["_label"].sum()
+    legit_ct   = total - fraud_ct
+    fraud_pct  = fraud_ct / total * 100
+
+    # ── KPIs ──────────────────────────────────────────────────────────────
+    section("🚨 Fraud Detection Overview", d)
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric("📋 Total Transactions", f"{total:,}")
+    c2.metric("✅ Legitimate",          f"{legit_ct:,}")
+    c3.metric("🚨 Fraudulent",          f"{fraud_ct:,}")
+    c4.metric("⚠️ Fraud Rate",          f"{fraud_pct:.3f}%")
+
+    # ── Fraud vs Legitimate ───────────────────────────────────────────────
+    section("📊 Fraud vs Legitimate Breakdown", d)
+    c1, c2 = st.columns(2)
+    with c1:
+        pie_df = pd.DataFrame({"Status":["Legitimate","Fraud"],"Count":[legit_ct,fraud_ct]})
+        fig = px.pie(pie_df, values="Count", names="Status",
+                     title="Transaction Class Distribution",
+                     color_discrete_sequence=[C_GREEN, C_RED], hole=0.45)
+        fig.update_layout(**chart_defaults(380))
+        st.plotly_chart(fig, use_container_width=True)
+    with c2:
+        bar_df = pd.DataFrame({"Status":["Legitimate","Fraud"],"Count":[legit_ct,fraud_ct]})
+        fig = px.bar(bar_df, x="Status", y="Count",
+                     title="Transaction Count — Fraud vs Legitimate",
+                     color="Status", color_discrete_map={"Legitimate":C_GREEN,"Fraud":C_RED},
+                     text_auto=True)
+        fig.update_layout(**chart_defaults(380))
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ── Amount Analysis ───────────────────────────────────────────────────
+    if amount_col:
+        section("💳 Transaction Amount Analysis", d)
+        c1, c2 = st.columns(2)
+        with c1:
+            fig = px.box(df2, x="_label", y=amount_col,
+                         title="Amount Distribution: Legitimate (0) vs Fraud (1)",
+                         color="_label",
+                         color_discrete_map={0:C_GREEN, 1:C_RED},
+                         labels={"_label":"Class","Amount":"Amount ($)"})
+            fig.update_layout(**chart_defaults(400))
+            st.plotly_chart(fig, use_container_width=True)
+        with c2:
+            fig = px.histogram(df2, x=amount_col, color="_label", nbins=50,
+                               title="Amount Histogram by Class",
+                               color_discrete_map={0:C_GREEN, 1:C_RED},
+                               barmode="overlay", opacity=0.7,
+                               labels={"_label":"0=Legit 1=Fraud"})
+            fig.update_layout(**chart_defaults(400))
+            st.plotly_chart(fig, use_container_width=True)
+
+        # Stats comparison
+        legit_amt  = df2[df2["_label"]==0][amount_col]
+        fraud_amt  = df2[df2["_label"]==1][amount_col]
+        c3, c4 = st.columns(2)
+        with c3:
+            st.markdown("**💚 Legitimate Transaction Amounts**")
+            st.dataframe(legit_amt.describe().round(2).reset_index(), use_container_width=True, hide_index=True)
+        with c4:
+            st.markdown("**🔴 Fraudulent Transaction Amounts**")
+            if len(fraud_amt) > 0:
+                st.dataframe(fraud_amt.describe().round(2).reset_index(), use_container_width=True, hide_index=True)
+            else:
+                st.info("No fraud cases in this sample.")
+
+    # ── Time Analysis ─────────────────────────────────────────────────────
+    if time_col:
+        section("⏱ Transaction Time Analysis", d)
+        c1, c2 = st.columns(2)
+        with c1:
+            fig = px.histogram(df2, x=time_col, color="_label", nbins=48,
+                               title="Transactions over Time (seconds)",
+                               color_discrete_map={0:C_GREEN, 1:C_RED},
+                               barmode="overlay", opacity=0.7,
+                               labels={"_label":"0=Legit 1=Fraud"})
+            fig.update_layout(**chart_defaults(380))
+            st.plotly_chart(fig, use_container_width=True)
+        with c2:
+            # Hourly buckets (assuming Time is seconds from midnight)
+            df2["_hour"] = (df2[time_col] / 3600).astype(int) % 24
+            hourly = df2.groupby(["_hour","_label"]).size().reset_index(name="Count")
+            fig = px.bar(hourly, x="_hour", y="Count", color="_label",
+                         title="Transactions by Hour of Day",
+                         color_discrete_map={0:C_GREEN, 1:C_RED},
+                         barmode="group",
+                         labels={"_hour":"Hour","_label":"0=Legit 1=Fraud"})
+            fig.update_layout(**chart_defaults(380))
+            st.plotly_chart(fig, use_container_width=True)
+
+    # ── Feature Analysis (V1-V28) ─────────────────────────────────────────
+    if v_cols:
+        section("🔬 Feature Distribution (Top 6 PCA Features)", d)
+        # Show only top 6 most discriminating features
+        top_v = v_cols[:6]
+        cols_grid = st.columns(2)
+        for i, vcol in enumerate(top_v):
+            with cols_grid[i % 2]:
+                fig = px.box(df2, x="_label", y=vcol,
+                             title=f"{vcol} — Fraud vs Legitimate",
+                             color="_label",
+                             color_discrete_map={0:C_GREEN, 1:C_RED},
+                             labels={"_label":"0=Legit 1=Fraud"})
+                fig.update_layout(**chart_defaults(320))
+                st.plotly_chart(fig, use_container_width=True)
+
+    # ── Correlation with fraud ────────────────────────────────────────────
+    section("🔗 Feature Correlation with Fraud", d)
+    num_cols_list = df2.select_dtypes(include="number").columns.tolist()
+    if "_label" in num_cols_list:
+        corr_with_fraud = (df2[num_cols_list].corr()["_label"]
+                           .drop("_label").sort_values(key=abs, ascending=False).head(15))
+        corr_df = corr_with_fraud.reset_index()
+        corr_df.columns = ["Feature","Correlation with Fraud"]
+        fig = px.bar(corr_df, x="Correlation with Fraud", y="Feature",
+                     orientation="h",
+                     title="Top 15 Features Most Correlated with Fraud",
+                     color="Correlation with Fraud",
+                     color_continuous_scale="RdBu_r",
+                     text_auto=".3f")
+        fig.update_layout(**chart_defaults(500), yaxis=dict(autorange="reversed"))
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ── Insight box ───────────────────────────────────────────────────────
+    insight(f"🚨 <strong>Fraud Rate: {fraud_pct:.3f}%</strong> — "
+            f"Out of <strong>{total:,}</strong> transactions, "
+            f"<strong>{fraud_ct:,}</strong> are fraudulent. "
+            + (f"Average fraudulent amount: <strong>${fraud_amt.mean():,.2f}</strong> vs "
+               f"legitimate: <strong>${legit_amt.mean():,.2f}</strong>"
+               if amount_col and len(df2[df2['_label']==1]) > 0 else ""))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  BOARDROOM SUMMARY
 # ══════════════════════════════════════════════════════════════════════════════
 def render_summary(df, found, domain):
@@ -1560,6 +1779,8 @@ def main():
         render_ecommerce(df, found)
     elif domain == "Retail":
         render_retail(df, found)
+    elif domain == "Fraud":
+        render_fraud(df, found)
     else:
         render_generic(df, found)
 
