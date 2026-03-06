@@ -184,46 +184,146 @@ def clean_data(df):
 
 # ─── Column Detector ─────────────────────────────────────────────────────────
 def detect_columns(df):
-    c = {col.lower().strip(): col for col in df.columns}
+    """
+    Robust column detection using:
+    1. Exact normalised match (strip, lower, collapse spaces)
+    2. Keyword-contains match (column name contains the keyword)
+    3. Numeric-type fallback for known numeric fields
+    """
+    # normalise: lower + collapse all whitespace/underscores to single space
+    def norm(s):
+        import re
+        return re.sub(r'[\s_\-]+', ' ', str(s).lower().strip())
+
+    col_norm = {norm(col): col for col in df.columns}   # normalised → original
     found = {}
 
+    # Priority-ordered synonym lists.  First match wins.
     maps = {
-        "date":        ["date","order date","transaction date","orderdate","order_date","sale date","invoice date","created date","purchase date"],
-        "sales":       ["sales","revenue","total price","totalprice","total sales","net sales","amount","total","sale amount","gross sales","total revenue","order value","net revenue"],
-        "profit":      ["profit","net profit","margin","earnings","gross profit","operating profit"],
-        "product":     ["product","product name","item","item name","sku","product_name","productname","product title","description"],
-        "category":    ["category","segment","type","product category","sub-category","subcategory","product type","dept","product group"],
-        "region":      ["region","area","zone","territory","location","city","state","country","market","store location"],
-        "quantity":    ["quantity","qty","units","quantity sold","units sold","quantity ordered","order qty"],
-        "customer":    ["customer","customer id","customerid","customer name","client","client id","buyer","consumer"],
-        "salary":      ["salary","wage","compensation","pay","base salary","annual salary","monthly salary"],
-        "spend":       ["spend","cost","budget","ad spend","marketing spend","campaign cost","ad cost"],
-        "channel":     ["channel","source","medium","platform","marketing channel","ad channel"],
-        "discount":    ["discount","discount amount","promo","offer","rebate"],
-        "returns":     ["return","returns","return status","returned","refund","refunded"],
-        "delivery":    ["delivery time","shipping days","lead time","days to ship","fulfillment time"],
-        "payment":     ["payment method","payment type","payment mode","pay method"],
-        "store":       ["store","store name","branch","outlet","shop","store id"],
-        "department":  ["department","dept","division","team","function","business unit"],
-        "gender":      ["gender","sex"],
-        "age":         ["age","age group","age band"],
-        "tenure":      ["tenure","years of service","experience","years at company","seniority"],
-        "attrition":   ["attrition","left","churn","resigned","turnover","exit"],
-        "satisfaction":["satisfaction","satisfaction score","rating","score","nps","csat","nsat"],
-        "impressions": ["impressions","impression","views","reach"],
-        "clicks":      ["clicks","click","click through"],
-        "conversions": ["conversions","conversion","leads","sign ups","signups"],
-        "roi":         ["roi","return on investment","roas"],
-        "price":       ["price","unit price","selling price","list price","mrp","rate"],
-        "cost":        ["cost","unit cost","cogs","cost of goods","purchase price"],
-        "order_id":    ["order id","orderid","order_id","transaction id","invoice id","receipt id"],
+        "date":        ["order date","ship date","transaction date","sale date","invoice date",
+                        "created date","purchase date","orderdate","shipdate","date","time",
+                        "order month","month","year","period","fiscal date","trans date"],
+        "sales":       ["sales","revenue","total price","total sales","net sales","sale amount",
+                        "gross sales","total revenue","order value","net revenue","totalprice",
+                        "total amount","amount","gross revenue","invoice amount","selling price",
+                        "sales amount","order total","transaction amount"],
+        "profit":      ["profit","net profit","gross profit","operating profit","earnings",
+                        "net income","income","ebit","ebitda"],
+        "product":     ["product name","product","item name","item","sku","product title",
+                        "product description","sub category","sub-category","productname",
+                        "product id","product code","goods","merchandise","article"],
+        "category":    ["category","product category","product group","product type",
+                        "segment","type","department","class","brand","line"],
+        "region":      ["region","territory","area","zone","market","geography"],
+        "city":        ["city","town","municipality"],
+        "state":       ["state","province","county"],
+        "country":     ["country","nation","country code"],
+        "quantity":    ["quantity","qty","units sold","quantity sold","quantity ordered",
+                        "units","order qty","items sold","volume","no of units","number of units"],
+        "customer":    ["customer name","customer id","customer","client name","client id",
+                        "client","buyer","consumer","account","contact","customerid"],
+        "salary":      ["salary","annual salary","monthly salary","base salary","wage",
+                        "compensation","pay","ctc","total compensation","income"],
+        "spend":       ["spend","ad spend","marketing spend","campaign cost","ad cost",
+                        "budget","marketing budget","media spend","advertising spend"],
+        "channel":     ["channel","marketing channel","ad channel","traffic source",
+                        "source","medium","platform","campaign type","utm source"],
+        "discount":    ["discount","discount amount","discount %","discount percent",
+                        "promo","rebate","coupon","offer","markdown"],
+        "returns":     ["return status","returned","return","returns","refund","refunded",
+                        "is returned","order status"],
+        "delivery":    ["delivery time","shipping days","days to ship","lead time",
+                        "fulfillment time","days to deliver","shipping time","transit days"],
+        "payment":     ["payment method","payment type","payment mode","pay method",
+                        "payment","mode of payment","transaction type"],
+        "store":       ["store name","store id","store","branch","outlet","shop",
+                        "location","point of sale","pos","store location"],
+        "department":  ["department","dept","division","team","function","business unit",
+                        "org unit","cost center"],
+        "gender":      ["gender","sex","employee gender"],
+        "age":         ["age","age group","age band","employee age"],
+        "tenure":      ["tenure","years of service","experience","years at company",
+                        "seniority","service years","employment duration"],
+        "attrition":   ["attrition","left company","churn","resigned","turnover",
+                        "exit","is churned","employee status","employment status"],
+        "satisfaction":["satisfaction score","satisfaction","rating","nps","csat",
+                        "score","review score","feedback score","star rating"],
+        "impressions": ["impressions","impression","views","reach","page views"],
+        "clicks":      ["clicks","click","click through","link clicks"],
+        "conversions": ["conversions","conversion","leads","sign ups","signups",
+                        "purchases","transactions","goals"],
+        "roi":         ["roi","roas","return on investment","return on ad spend"],
+        "price":       ["unit price","selling price","list price","mrp","price",
+                        "rate","cost price","base price","retail price"],
+        "cost":        ["unit cost","cost of goods","cogs","purchase price","cost",
+                        "product cost","manufacturing cost"],
+        "order_id":    ["order id","order no","orderid","transaction id","invoice id",
+                        "receipt id","order number","invoice number"],
+        "profit_margin":["profit margin","margin %","gross margin","net margin"],
+        "ship_mode":   ["ship mode","shipping mode","delivery mode","shipment type","ship method"],
+        "segment":     ["segment","customer segment","market segment","customer type"],
+        "sub_category":["sub category","sub-category","subcategory","product sub category"],
     }
 
+    # Pass 1: exact normalised match
     for key, synonyms in maps.items():
+        if key in found:
+            continue
         for s in synonyms:
-            if s in c:
-                found[key] = c[s]
+            ns = norm(s)
+            if ns in col_norm:
+                found[key] = col_norm[ns]
                 break
+
+    # Pass 2: contains match — column name *contains* the keyword
+    # (catches "Order Date", "Total Sales", "Product Name" etc.)
+    for key, synonyms in maps.items():
+        if key in found:
+            continue
+        for col_n, col_orig in col_norm.items():
+            for s in synonyms:
+                ns = norm(s)
+                if ns in col_n or col_n in ns:
+                    found[key] = col_orig
+                    break
+            if key in found:
+                break
+
+    # Pass 3: numeric-type fallback — pick the first numeric column that
+    # *starts with* a recognisable keyword when nothing else matched.
+    num_cols = df.select_dtypes(include="number").columns.tolist()
+    fallback_keywords = {
+        "sales":    ["sale","revenue","amount","total","price"],
+        "profit":   ["profit","earn","income"],
+        "quantity": ["qty","quant","unit","count","volume"],
+        "discount": ["disc","promo"],
+        "salary":   ["salary","wage","pay","comp"],
+        "spend":    ["spend","budget","cost"],
+        "impressions": ["impression","view","reach"],
+        "clicks":   ["click"],
+        "conversions": ["conv","lead"],
+    }
+    for key, kws in fallback_keywords.items():
+        if key in found:
+            continue
+        for col in num_cols:
+            cn = norm(col)
+            if any(cn.startswith(k) or k in cn for k in kws):
+                found[key] = col
+                break
+
+    # Pass 4: date fallback — find first datetime column
+    if "date" not in found:
+        for col in df.columns:
+            if pd.api.types.is_datetime64_any_dtype(df[col]):
+                found["date"] = col
+                break
+        if "date" not in found:
+            for col in df.columns:
+                cn = norm(col)
+                if any(k in cn for k in ["date","time","month","year","period"]):
+                    found["date"] = col
+                    break
 
     return found
 
@@ -1121,20 +1221,134 @@ def render_summary(df, found, domain):
 # ══════════════════════════════════════════════════════════════════════════════
 #  LLM Q&A
 # ══════════════════════════════════════════════════════════════════════════════
-def render_llm_qa(df, domain):
+def render_llm_qa(df, domain, found):
     section("🤖 AI-Powered Boardroom Q&A", domain.lower())
-    if st.button("🧠 Generate & Answer 5 Boardroom Questions"):
-        with st.spinner("AI is analysing your data..."):
-            num_cols = df.select_dtypes(include="number").columns.tolist()
-            ctx = df[num_cols].describe().to_string() if num_cols else "No numeric data."
-            prompt = (f"You are a senior {domain} analyst. Dataset columns: {', '.join(df.columns)}.\n"
-                      f"Stats:\n{ctx}\n\n"
-                      f"Generate exactly 5 insightful {domain}-specific boardroom questions and answer each "
-                      f"in 1-2 sentences using the stats. Format: Q1: ... A1: ...")
-            try:
-                st.text_area("AI Analysis", query_llm(prompt), height=420)
-            except Exception as e:
-                st.warning(f"LLM unavailable: {e}. Set LLM_PROVIDER in Streamlit Secrets to enable.")
+    tab_auto, tab_llm = st.tabs(["📊 Auto Insights (Always Works)", "🤖 LLM Q&A (API Key Required)"])
+
+    with tab_auto:
+        st.markdown("**Auto-computed boardroom insights from your actual data:**")
+        qa = []
+        sc   = found.get("sales");    pc   = found.get("profit")
+        prod = found.get("product");  cat  = found.get("category")
+        dc   = found.get("date");     qty  = found.get("quantity")
+        cust = found.get("customer"); reg  = found.get("region")
+        sal  = found.get("salary");   attr = found.get("attrition")
+        imp  = found.get("impressions"); clk = found.get("clicks")
+        conv = found.get("conversions"); sp = found.get("spend")
+        store= found.get("store");    disc = found.get("discount")
+        dept = found.get("department")
+
+        if sc:
+            total = df[sc].sum(); avg = df[sc].mean(); mx = df[sc].max()
+            qa.append(("💰 What is our total revenue?",
+                f"Total revenue is **{total:,.2f}**, average **{avg:,.2f}** per record, peak **{mx:,.2f}**."))
+
+        if sc and dc:
+            dfc = df.copy()
+            dfc[dc] = pd.to_datetime(dfc[dc], errors="coerce")
+            dfc = dfc.dropna(subset=[dc])
+            if not dfc.empty:
+                dfc["_M"] = dfc[dc].dt.to_period("M").astype(str)
+                monthly = dfc.groupby("_M")[sc].sum()
+                bm = monthly.idxmax(); bmv = monthly.max()
+                wm = monthly.idxmin(); wmv = monthly.min()
+                qa.append(("📅 Which month had the highest and lowest sales?",
+                    f"Best: **{bm}** ({bmv:,.2f}) | Worst: **{wm}** ({wmv:,.2f})."))
+
+        if sc and prod:
+            tp = df.groupby(prod)[sc].sum()
+            top3 = ", ".join([f"{p} ({v:,.0f})" for p,v in tp.nlargest(3).items()])
+            bot3 = ", ".join([f"{p} ({v:,.0f})" for p,v in tp.nsmallest(3).items()])
+            qa.append(("🛒 Top 3 and bottom 3 products by revenue?",
+                f"**Top 3:** {top3}. **Bottom 3:** {bot3}."))
+
+        if sc and pc:
+            margin = df[pc].sum() / df[sc].sum() * 100
+            qa.append(("📊 What is our overall profit margin?",
+                f"Overall margin: **{margin:.1f}%** | Total profit: **{df[pc].sum():,.2f}**."))
+
+        if sc and cat:
+            tc = df.groupby(cat)[sc].sum().sort_values(ascending=False)
+            top_cats = ", ".join([f"{k} ({v:,.0f})" for k,v in tc.head(3).items()])
+            qa.append(("🗂 Which categories drive the most revenue?",
+                f"Top categories: {top_cats}."))
+
+        if sc and reg:
+            tr = df.groupby(reg)[sc].sum().sort_values(ascending=False)
+            qa.append(("🌍 Which region generates the highest revenue?",
+                f"Top: **{tr.index[0]}** ({tr.iloc[0]:,.2f}) | Bottom: **{tr.index[-1]}** ({tr.iloc[-1]:,.2f})."))
+
+        if sc and cust:
+            tc2 = df.groupby(cust)[sc].sum().sort_values(ascending=False).head(5)
+            qa.append(("👥 Who are our top 5 customers?",
+                "**Top 5:** " + ", ".join([f"{c} ({v:,.0f})" for c,v in tc2.items()]) + "."))
+
+        if qty:
+            qa.append(("📦 How many total units sold?",
+                f"Total: **{df[qty].sum():,.0f}** units | Avg per order: **{df[qty].mean():,.1f}**."))
+
+        if disc and sc:
+            corr = df[[disc,sc]].dropna().corr().iloc[0,1]
+            direction = "Positive — higher discounts tend to increase order value." if corr > 0.1 else "Negative/weak — discounts do not strongly boost sales." if corr < -0.1 else "Neutral."
+            qa.append(("🏷 Do discounts increase sales?",
+                f"Discount–Sales correlation: **{corr:.2f}**. {direction}"))
+
+        if sal:
+            qa.append(("💼 What is our salary distribution?",
+                f"Avg: **{df[sal].mean():,.0f}** | Median: **{df[sal].median():,.0f}** | Range: **{df[sal].min():,.0f}–{df[sal].max():,.0f}**."))
+
+        if attr:
+            rate = df[attr].astype(str).str.lower().isin(["yes","true","1"]).mean() * 100
+            health = "⚠️ Above 15% benchmark." if rate > 15 else "✅ Within healthy range."
+            qa.append(("📉 What is the attrition rate?",
+                f"**{rate:.1f}%** of employees have left. {health}"))
+
+        if imp and clk:
+            ctr_val = df[clk].sum() / df[imp].sum() * 100
+            health2 = "✅ Strong (>2%)." if ctr_val > 2 else "⚠️ Below 2% — consider creative refresh."
+            qa.append(("🖱 What is our CTR?",
+                f"CTR: **{ctr_val:.2f}%** ({df[clk].sum():,.0f} clicks / {df[imp].sum():,.0f} impressions). {health2}"))
+
+        if clk and conv:
+            cvr_val = df[conv].sum() / df[clk].sum() * 100
+            qa.append(("✅ What is our conversion rate?",
+                f"CVR: **{cvr_val:.2f}%** ({df[conv].sum():,.0f} conversions from {df[clk].sum():,.0f} clicks)."))
+
+        if sp and sc:
+            roi_val = (df[sc].sum() - df[sp].sum()) / df[sp].sum() * 100
+            health3 = "✅ Positive ROI." if roi_val > 0 else "⚠️ Negative ROI — spend exceeds revenue."
+            qa.append(("💸 What is our marketing ROI?",
+                f"Spend: **{df[sp].sum():,.2f}** | Revenue: **{df[sc].sum():,.2f}** | ROI: **{roi_val:.1f}%**. {health3}"))
+
+        if not qa:
+            for col in df.select_dtypes(include="number").columns[:5]:
+                s = df[col].dropna()
+                qa.append((f"📈 {col} summary?",
+                    f"Total: **{s.sum():,.2f}** | Mean: **{s.mean():,.2f}** | Range: **{s.min():,.2f}–{s.max():,.2f}**"))
+
+        for i, (q, a) in enumerate(qa, 1):
+            with st.expander(f"Q{i}: {q}", expanded=(i == 1)):
+                st.markdown(f"**A{i}:** {a}")
+
+    with tab_llm:
+        if LLM_PROVIDER == "huggingface":
+            st.info("💡 **tiny-gpt2 cannot answer questions** — it only generates random text.\n\n"
+                    "Set `LLM_PROVIDER` in Streamlit Secrets to `openai`, `anthropic`, or `cohere` with the API key to enable real AI answers.")
+        else:
+            if st.button("🧠 Generate AI Boardroom Analysis"):
+                with st.spinner("Querying AI..."):
+                    num_cols = df.select_dtypes(include="number").columns.tolist()
+                    ctx = df[num_cols].describe().round(2).to_string() if num_cols else "No numeric data."
+                    prompt = (
+                        f"You are a senior {domain} analyst. Dataset: {len(df):,} records.\n"
+                        f"Columns: {', '.join(df.columns)}\nStats:\n{ctx}\n\n"
+                        f"Write 5 data-backed {domain} boardroom Q&As citing actual numbers.\n"
+                        f"Format: Q1: [question]\nA1: [answer]\n\nQ2: ..."
+                    )
+                    try:
+                        st.markdown(query_llm(prompt))
+                    except Exception as e:
+                        st.error(f"LLM error: {e}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  MAIN
@@ -1241,7 +1455,7 @@ def main():
 
     # Always render summary + AI Q&A
     render_summary(df, found, domain)
-    render_llm_qa(df, domain)
+    render_llm_qa(df, domain, found)
 
 
 if __name__ == "__main__":
