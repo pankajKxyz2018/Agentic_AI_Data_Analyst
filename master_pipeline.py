@@ -2952,6 +2952,1363 @@ def render_calc_engine(df, found, domain):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  ENGINE 1 — ANOMALY DETECTION (runs on load, shows banner)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def detect_anomalies(df, found, domain):
+    """
+    Runs automatically on data load.
+    Returns list of anomaly dicts: {severity, title, detail, icon}
+    severity: 'critical' | 'warning' | 'info'
+    """
+    anomalies = []
+    sc   = found.get("sales");   pc  = found.get("profit")
+    sal  = found.get("salary");  dc  = found.get("date")
+    attr = found.get("attrition"); dept = found.get("department")
+    qty  = found.get("quantity"); dis  = found.get("discount")
+    emp  = found.get("employee_id") or found.get("employee_name")
+    gen  = found.get("gender");  age  = found.get("age")
+
+    # ── 1. Missing Data ───────────────────────────────────────────────────
+    for col in df.columns:
+        pct = df[col].isna().mean() * 100
+        if pct >= 50:
+            anomalies.append({"severity":"critical","icon":"🔴",
+                "title":f"Critical missing data: '{col}'",
+                "detail":f"{pct:.1f}% of values are missing — results for this column will be unreliable."})
+        elif pct >= 20:
+            anomalies.append({"severity":"warning","icon":"🟡",
+                "title":f"High missing data: '{col}'",
+                "detail":f"{pct:.1f}% missing values detected."})
+
+    # ── 2. Duplicate rows ─────────────────────────────────────────────────
+    dup_count = df.duplicated().sum()
+    if dup_count > 0:
+        dup_pct = dup_count / len(df) * 100
+        sev = "critical" if dup_pct > 10 else "warning"
+        anomalies.append({"severity":sev,"icon":"🟠" if sev=="warning" else "🔴",
+            "title":f"{dup_count:,} duplicate rows detected ({dup_pct:.1f}%)",
+            "detail":"Duplicate rows can inflate totals and distort averages. Consider deduplication."})
+
+    # ── 3. Numeric outliers (Z-score & IQR) ──────────────────────────────
+    num_cols = df.select_dtypes(include="number").columns.tolist()
+    for col in num_cols[:15]:  # check first 15 numeric cols
+        s = df[col].dropna()
+        if len(s) < 10: continue
+        # IQR method
+        q1, q3 = s.quantile(0.25), s.quantile(0.75)
+        iqr = q3 - q1
+        if iqr == 0: continue
+        outliers = ((s < q1 - 3*iqr) | (s > q3 + 3*iqr)).sum()
+        if outliers > 0:
+            pct = outliers / len(s) * 100
+            if pct > 5:
+                anomalies.append({"severity":"warning","icon":"🟡",
+                    "title":f"Outliers in '{col}': {outliers:,} extreme values ({pct:.1f}%)",
+                    "detail":f"Min: {s.min():,.2f} | Max: {s.max():,.2f} | Expected range: {q1-3*iqr:,.2f} – {q3+3*iqr:,.2f}"})
+
+    # ── 4. Revenue / Sales anomalies ──────────────────────────────────────
+    if sc and dc:
+        try:
+            d2 = df.copy()
+            d2[dc] = pd.to_datetime(d2[dc], errors="coerce")
+            d2 = d2.dropna(subset=[dc])
+            d2["_M"] = d2[dc].dt.to_period("M").astype(str)
+            monthly = d2.groupby("_M")[sc].sum()
+            if len(monthly) >= 3:
+                mean_rev = monthly.mean()
+                std_rev  = monthly.std()
+                spikes = monthly[monthly > mean_rev + 2.5*std_rev]
+                drops  = monthly[monthly < mean_rev - 2.5*std_rev]
+                if len(spikes) > 0:
+                    for m, v in spikes.items():
+                        anomalies.append({"severity":"warning","icon":"📈",
+                            "title":f"Revenue spike in {m}: {v:,.0f}",
+                            "detail":f"This is {(v-mean_rev)/mean_rev*100:.0f}% above average monthly revenue ({mean_rev:,.0f}). Verify if correct."})
+                if len(drops) > 0:
+                    for m, v in drops.items():
+                        anomalies.append({"severity":"critical","icon":"📉",
+                            "title":f"Revenue drop in {m}: {v:,.0f}",
+                            "detail":f"This is {abs(v-mean_rev)/mean_rev*100:.0f}% below average ({mean_rev:,.0f}). Investigate root cause."})
+        except Exception:
+            pass
+
+    # ── 5. Negative values where impossible ──────────────────────────────
+    for col_key in ["sales","profit","salary","quantity","spend","impressions","clicks"]:
+        col = found.get(col_key)
+        if col:
+            neg = (df[col] < 0).sum()
+            if neg > 0:
+                anomalies.append({"severity":"warning","icon":"⚠️",
+                    "title":f"Negative values in '{col}': {neg:,} rows",
+                    "detail":f"Negative {col_key} values may indicate data entry errors or returns/refunds."})
+
+    # ── 6. Salary anomalies (HR) ──────────────────────────────────────────
+    if sal:
+        s = df[sal].dropna()
+        if len(s) > 10:
+            mean_s = s.mean()
+            extreme_high = (s > mean_s * 5).sum()
+            extreme_low  = (s < mean_s * 0.1).sum()
+            if extreme_high > 0:
+                anomalies.append({"severity":"warning","icon":"💰",
+                    "title":f"{extreme_high} employees with salary > 5× average",
+                    "detail":f"Average salary: {mean_s:,.0f}. These records may be senior executives or data errors."})
+            if extreme_low > 0:
+                anomalies.append({"severity":"warning","icon":"💰",
+                    "title":f"{extreme_low} employees with salary < 10% of average",
+                    "detail":f"Very low salaries detected. May indicate part-time, interns, or data errors."})
+
+    # ── 7. Attrition rate warning ─────────────────────────────────────────
+    if attr:
+        rate = df[attr].astype(str).str.lower().isin(
+            ["yes","true","1","resigned","terminated","left"]).mean() * 100
+        if rate > 20:
+            anomalies.append({"severity":"critical","icon":"🔴",
+                "title":f"Critical attrition rate: {rate:.1f}%",
+                "detail":"Attrition above 20% is a serious retention risk. Immediate HR intervention recommended."})
+        elif rate > 12:
+            anomalies.append({"severity":"warning","icon":"🟡",
+                "title":f"High attrition rate: {rate:.1f}%",
+                "detail":"Industry healthy range is 8-12%. Investigate by department and tenure."})
+
+    # ── 8. Fraud rate ─────────────────────────────────────────────────────
+    if domain == "Fraud":
+        cl = {c.lower().strip(): c for c in df.columns}
+        fraud_cols = ["class","label","fraud","is_fraud","isfraud","target"]
+        cc = next((cl[c] for c in fraud_cols if c in cl), None)
+        if cc:
+            df2 = df.copy()
+            df2["_lbl"] = df2[cc].astype(str).str.lower().map(
+                lambda x: 1 if x in ["1","true","yes","fraud"] else 0)
+            rate = df2["_lbl"].mean() * 100
+            amt_col = cl.get("amount")
+            if rate > 1:
+                exposure = ""
+                if amt_col:
+                    exp = df2[df2["_lbl"]==1][amt_col].sum()
+                    exposure = f" | Total exposure: ${exp:,.2f}"
+                anomalies.append({"severity":"critical","icon":"🚨",
+                    "title":f"High fraud rate detected: {rate:.3f}%",
+                    "detail":f"{int(df2['_lbl'].sum()):,} fraudulent transactions out of {len(df2):,}{exposure}"})
+
+    # ── 9. Gender imbalance ───────────────────────────────────────────────
+    if gen:
+        gc = df[gen].astype(str).str.title().value_counts()
+        m = gc.get("Male", gc.get("M", 0))
+        f = gc.get("Female", gc.get("F", 0))
+        total_g = m + f
+        if total_g > 0:
+            ratio = min(m, f) / total_g * 100
+            if ratio < 20:
+                anomalies.append({"severity":"info","icon":"ℹ️",
+                    "title":f"Gender imbalance: {ratio:.0f}% minority gender",
+                    "detail":f"Male: {int(m):,} | Female: {int(f):,}. Consider diversity initiatives."})
+
+    # ── 10. Zero-value records ────────────────────────────────────────────
+    if sc:
+        zeros = (df[sc] == 0).sum()
+        if zeros > len(df) * 0.05:
+            anomalies.append({"severity":"info","icon":"🔵",
+                "title":f"{zeros:,} zero-value transactions ({zeros/len(df)*100:.1f}%)",
+                "detail":"Zero-value records may be cancelled orders, free items, or data gaps."})
+
+    # ── 11. Date gaps ─────────────────────────────────────────────────────
+    if dc:
+        try:
+            dates = pd.to_datetime(df[dc], errors="coerce").dropna().sort_values()
+            if len(dates) > 10:
+                gaps = dates.diff().dt.days.dropna()
+                max_gap = gaps.max()
+                if max_gap > 60:
+                    gap_date = dates.iloc[gaps.argmax()]
+                    anomalies.append({"severity":"warning","icon":"📅",
+                        "title":f"Data gap of {int(max_gap)} days detected",
+                        "detail":f"No records around {gap_date.date()}. May indicate missing data for that period."})
+        except Exception:
+            pass
+
+    return anomalies
+
+
+def render_anomaly_banner(anomalies, domain):
+    """Show anomaly banner at the top of the page after data loads."""
+    if not anomalies:
+        st.markdown("""<div style="background:linear-gradient(135deg,#052e16,#064e3b);
+            border:1px solid #16a34a;border-radius:12px;padding:14px 20px;margin:8px 0">
+            <span style="color:#4ade80;font-size:1rem;font-weight:700">
+            ✅ No anomalies detected</span>
+            <span style="color:#86efac;font-size:.88rem;margin-left:12px">
+            Data quality looks good — no outliers, duplicates, or unusual patterns found.</span>
+            </div>""", unsafe_allow_html=True)
+        return
+
+    critical = [a for a in anomalies if a["severity"] == "critical"]
+    warnings  = [a for a in anomalies if a["severity"] == "warning"]
+    infos     = [a for a in anomalies if a["severity"] == "info"]
+
+    # Summary bar
+    parts = []
+    if critical: parts.append(f"🔴 {len(critical)} Critical")
+    if warnings:  parts.append(f"🟡 {len(warnings)} Warnings")
+    if infos:     parts.append(f"🔵 {len(infos)} Info")
+    summary = " &nbsp;|&nbsp; ".join(parts)
+
+    border_color = "#ef4444" if critical else "#f59e0b"
+    bg_color     = "#1a0a0a" if critical else "#1a1200"
+
+    st.markdown(f"""<div style="background:{bg_color};border:1px solid {border_color};
+        border-radius:12px;padding:14px 20px;margin:8px 0">
+        <span style="color:#f87171;font-size:1rem;font-weight:700">
+        🚨 Anomalies Detected &nbsp;</span>
+        <span style="color:#fca5a5;font-size:.88rem">{summary}</span>
+        </div>""", unsafe_allow_html=True)
+
+    with st.expander(f"🔍 View all {len(anomalies)} anomalies detected in your data", expanded=True):
+        for sev_label, sev_list in [("🔴 Critical Issues", critical),
+                                     ("🟡 Warnings", warnings),
+                                     ("🔵 Information", infos)]:
+            if not sev_list: continue
+            st.markdown(f"**{sev_label}**")
+            for a in sev_list:
+                col1, col2 = st.columns([1, 8])
+                with col1:
+                    st.markdown(f"<div style='font-size:1.5rem;text-align:center'>{a['icon']}</div>",
+                                unsafe_allow_html=True)
+                with col2:
+                    st.markdown(f"**{a['title']}**")
+                    st.caption(a["detail"])
+                st.markdown("---")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ENGINE 2 — EXPLORATORY DATA ANALYSIS (EDA)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_eda(df, found, domain):
+    section("🔍 Exploratory Data Analysis", domain.lower())
+
+    st.markdown("""<div class="insight-box">
+    <strong>🔍 What is EDA?</strong> — It's a full health check of your data before any analysis.<br>
+    It answers: <em>What does my data look like? Where are the gaps? What's unusual?
+    Which columns are related to each other?</em>
+    </div>""", unsafe_allow_html=True)
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📋 Data Profile",
+        "📊 Distributions",
+        "🔗 Correlations",
+        "🎯 Outlier Analysis",
+        "📅 Time Patterns"
+    ])
+
+    num_cols = df.select_dtypes(include="number").columns.tolist()
+    cat_cols = df.select_dtypes(include=["object","category"]).columns.tolist()
+
+    # ── TAB 1: Data Profile ───────────────────────────────────────────────
+    with tab1:
+        st.markdown("**📋 Full column profile — every column at a glance:**")
+
+        profile_rows = []
+        for col in df.columns:
+            s = df[col]
+            dtype = str(s.dtype)
+            total = len(s)
+            missing = s.isna().sum()
+            missing_pct = missing / total * 100
+            unique = s.nunique()
+            unique_pct = unique / total * 100
+
+            if pd.api.types.is_numeric_dtype(s):
+                sn = s.dropna()
+                skew = float(sn.skew()) if len(sn) > 3 else 0
+                skew_label = ("Right-skewed" if skew > 1 else
+                              "Left-skewed" if skew < -1 else "Normal")
+                stats = f"Min:{sn.min():,.1f} | Mean:{sn.mean():,.1f} | Max:{sn.max():,.1f}"
+                col_type = "🔢 Numeric"
+            elif pd.api.types.is_datetime64_any_dtype(s):
+                sd = s.dropna()
+                stats = f"{sd.min().date()} → {sd.max().date()}" if len(sd) > 0 else "—"
+                skew_label = "—"
+                col_type = "📅 Date"
+            else:
+                top = s.value_counts().index[0] if s.nunique() > 0 else "—"
+                stats = f"Top: {str(top)[:25]}"
+                skew_label = "—"
+                col_type = "📝 Text" if unique_pct > 50 else "🏷 Category"
+
+            quality = ("✅ Good" if missing_pct < 5 else
+                       "⚠️ Moderate" if missing_pct < 20 else "❌ Poor")
+
+            profile_rows.append({
+                "Column": col,
+                "Type": col_type,
+                "Missing": f"{missing:,} ({missing_pct:.1f}%)",
+                "Unique": f"{unique:,} ({unique_pct:.0f}%)",
+                "Stats / Sample": stats,
+                "Distribution": skew_label,
+                "Quality": quality,
+            })
+
+        st.dataframe(pd.DataFrame(profile_rows), use_container_width=True, hide_index=True)
+
+        # Summary stats for numeric
+        if num_cols:
+            st.markdown("**📊 Detailed statistics for numeric columns:**")
+            desc = df[num_cols].describe().T.round(2)
+            desc.index.name = "Column"
+            desc = desc.reset_index()
+            st.dataframe(desc, use_container_width=True, hide_index=True)
+
+        # Missing data visual
+        missing_data = df.isna().sum()
+        missing_data = missing_data[missing_data > 0].sort_values(ascending=False)
+        if len(missing_data) > 0:
+            st.markdown("**🕳 Missing Data by Column:**")
+            md_df = missing_data.reset_index()
+            md_df.columns = ["Column", "Missing Count"]
+            md_df["Missing %"] = (md_df["Missing Count"] / len(df) * 100).round(1)
+            fig = px.bar(md_df, x="Column", y="Missing %",
+                         title="Missing Data % per Column",
+                         color="Missing %",
+                         color_continuous_scale=["#22c55e","#f59e0b","#ef4444"],
+                         text_auto=".1f")
+            fig.add_hline(y=20, line_dash="dash", line_color="#f59e0b",
+                          annotation_text="20% threshold")
+            fig.update_layout(**cd(380))
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.success("✅ No missing data found!")
+
+    # ── TAB 2: Distributions ──────────────────────────────────────────────
+    with tab2:
+        if num_cols:
+            st.markdown("**📊 Distribution of every numeric column:**")
+            sel_cols = st.multiselect("Select columns to analyse:",
+                                       num_cols, default=num_cols[:6],
+                                       key="eda_dist_cols")
+            if sel_cols:
+                for col in sel_cols:
+                    s = df[col].dropna()
+                    c1, c2, c3 = st.columns([2, 2, 1])
+                    with c1:
+                        fig = px.histogram(df, x=col, nbins=40,
+                                           title=f"{col} — Distribution",
+                                           color_discrete_sequence=[C["blue"]],
+                                           marginal="box")
+                        fig.update_layout(**cd(320))
+                        st.plotly_chart(fig, use_container_width=True)
+                    with c2:
+                        fig2 = px.violin(df, y=col, box=True,
+                                         title=f"{col} — Violin Plot",
+                                         color_discrete_sequence=[C["purple"]])
+                        fig2.update_layout(**cd(320))
+                        st.plotly_chart(fig2, use_container_width=True)
+                    with c3:
+                        skew = float(s.skew())
+                        kurt = float(s.kurtosis())
+                        st.metric("Mean",   f"{s.mean():,.2f}")
+                        st.metric("Median", f"{s.median():,.2f}")
+                        st.metric("Std Dev",f"{s.std():,.2f}")
+                        st.metric("Skew",   f"{skew:.2f}")
+                        st.metric("Kurtosis",f"{kurt:.2f}")
+                        skew_msg = ("Right tail heavy →\nhigher outliers" if skew > 1 else
+                                    "Left tail heavy →\nlower outliers" if skew < -1 else
+                                    "Roughly normal distribution")
+                        st.caption(skew_msg)
+
+        if cat_cols:
+            st.markdown("**🏷 Distribution of categorical columns:**")
+            cat_sel = st.multiselect("Select categorical columns:",
+                                      [c for c in cat_cols if df[c].nunique() <= 50],
+                                      default=[c for c in cat_cols if df[c].nunique() <= 30][:3],
+                                      key="eda_cat_cols")
+            cols_g = st.columns(2)
+            for i, col in enumerate(cat_sel):
+                with cols_g[i % 2]:
+                    vc = df[col].value_counts().head(15).reset_index()
+                    vc.columns = [col, "Count"]
+                    fig = px.bar(vc, x=col, y="Count",
+                                 title=f"{col} — Value Counts (Top 15)",
+                                 color="Count",
+                                 color_continuous_scale="Blues",
+                                 text_auto=True)
+                    fig.update_layout(**cd(360))
+                    st.plotly_chart(fig, use_container_width=True)
+
+    # ── TAB 3: Correlations ───────────────────────────────────────────────
+    with tab3:
+        if len(num_cols) >= 2:
+            st.markdown("**🔗 How strongly are your columns related to each other?**")
+            st.caption("Values close to 1.0 = strong positive link | -1.0 = strong inverse | 0 = no link")
+
+            corr_cols = num_cols[:20]
+            corr = df[corr_cols].corr().round(3)
+
+            fig = px.imshow(corr,
+                            color_continuous_scale="RdBu_r",
+                            zmin=-1, zmax=1,
+                            title="Correlation Matrix — All Numeric Columns",
+                            text_auto=".2f",
+                            aspect="auto")
+            fig.update_layout(**cd(max(500, len(corr_cols)*35)))
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Top correlations table
+            st.markdown("**🏆 Strongest correlations (plain English):**")
+            pairs = []
+            for i in range(len(corr.columns)):
+                for j in range(i+1, len(corr.columns)):
+                    val = corr.iloc[i, j]
+                    if abs(val) > 0.3:
+                        strength = ("Very Strong" if abs(val) > 0.8 else
+                                    "Strong" if abs(val) > 0.6 else
+                                    "Moderate" if abs(val) > 0.4 else "Weak")
+                        direction = "📈 Positive" if val > 0 else "📉 Negative"
+                        plain = (f"When {corr.columns[i]} goes up, {corr.columns[j]} tends to "
+                                 f"{'go up too' if val > 0 else 'go down'}")
+                        pairs.append({
+                            "Column A": corr.columns[i],
+                            "Column B": corr.columns[j],
+                            "Correlation": f"{val:.3f}",
+                            "Strength": strength,
+                            "Direction": direction,
+                            "What it means": plain
+                        })
+            if pairs:
+                pairs_df = pd.DataFrame(pairs).sort_values("Correlation",
+                           key=lambda x: x.abs(), ascending=False)
+                st.dataframe(pairs_df, use_container_width=True, hide_index=True)
+
+            # Scatter matrix for key columns
+            key_num = [found.get(k) for k in ["sales","profit","salary","quantity","discount","spend"]
+                       if found.get(k)][:5]
+            if len(key_num) >= 2:
+                st.markdown("**🔵 Scatter Matrix — Key Columns:**")
+                fig2 = px.scatter_matrix(df.sample(min(500, len(df))),
+                                          dimensions=key_num,
+                                          color=found.get("category") or found.get("department"),
+                                          title="Relationships between key columns",
+                                          opacity=0.5)
+                fig2.update_layout(**cd(600))
+                st.plotly_chart(fig2, use_container_width=True)
+        else:
+            st.info("Need at least 2 numeric columns for correlation analysis.")
+
+    # ── TAB 4: Outlier Analysis ───────────────────────────────────────────
+    with tab4:
+        st.markdown("**🎯 Outlier Detection — find extreme values in your data**")
+        st.caption("Outliers are values that are unusually high or low compared to the rest of the data.")
+
+        if not num_cols:
+            st.info("No numeric columns found.")
+        else:
+            out_sel = st.multiselect("Select columns to check for outliers:",
+                                      num_cols, default=num_cols[:5],
+                                      key="eda_out_cols")
+
+            outlier_summary = []
+            for col in out_sel:
+                s = df[col].dropna()
+                if len(s) < 10: continue
+
+                q1, q3 = s.quantile(0.25), s.quantile(0.75)
+                iqr = q3 - q1
+                lower = q1 - 1.5*iqr
+                upper = q3 + 1.5*iqr
+                extreme_lower = q1 - 3*iqr
+                extreme_upper = q3 + 3*iqr
+
+                mild_out   = ((s < lower) | (s > upper)).sum()
+                extreme_out = ((s < extreme_lower) | (s > extreme_upper)).sum()
+
+                outlier_summary.append({
+                    "Column": col,
+                    "Total Values": f"{len(s):,}",
+                    "Mild Outliers": f"{mild_out:,} ({mild_out/len(s)*100:.1f}%)",
+                    "Extreme Outliers": f"{extreme_out:,} ({extreme_out/len(s)*100:.1f}%)",
+                    "Normal Range": f"{lower:,.2f} – {upper:,.2f}",
+                    "Status": ("✅ Clean" if extreme_out == 0 else
+                               "⚠️ Has outliers" if extreme_out < len(s)*0.05 else
+                               "❌ Many outliers")
+                })
+
+                # Box plot
+                fig = px.box(df, y=col, title=f"{col} — Box Plot (outliers shown as dots)",
+                             color_discrete_sequence=[C["blue"]],
+                             points="outliers")
+                fig.update_layout(**cd(320))
+                st.plotly_chart(fig, use_container_width=True)
+
+            if outlier_summary:
+                st.markdown("**Outlier Summary:**")
+                st.dataframe(pd.DataFrame(outlier_summary),
+                             use_container_width=True, hide_index=True)
+
+    # ── TAB 5: Time Patterns ──────────────────────────────────────────────
+    with tab5:
+        dc = found.get("date")
+        if not dc:
+            st.info("No date column detected. Time pattern analysis not available.")
+        else:
+            val_col = (found.get("sales") or found.get("salary") or
+                       found.get("spend") or num_cols[0] if num_cols else None)
+            if not val_col:
+                st.info("No numeric column to analyse over time.")
+            else:
+                d2 = df.copy()
+                d2[dc] = pd.to_datetime(d2[dc], errors="coerce")
+                d2 = d2.dropna(subset=[dc])
+                d2["_Year"]  = d2[dc].dt.year
+                d2["_Month"] = d2[dc].dt.month
+                d2["_DOW"]   = d2[dc].dt.day_name()
+                d2["_M"]     = d2[dc].dt.to_period("M").astype(str)
+                d2["_Q"]     = d2[dc].dt.to_period("Q").astype(str)
+
+                st.markdown(f"**📅 Time patterns for: {val_col}**")
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    m = d2.groupby("_M")[val_col].sum().reset_index()
+                    m.columns = ["Month", val_col]
+                    fig = px.line(m, x="Month", y=val_col,
+                                  title="Monthly Trend",
+                                  markers=True,
+                                  color_discrete_sequence=[C["blue"]])
+                    fig.update_layout(**cd(360))
+                    st.plotly_chart(fig, use_container_width=True)
+                with c2:
+                    dow_order = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+                    dw = d2.groupby("_DOW")[val_col].mean().reindex(dow_order).reset_index()
+                    dw.columns = ["Day", "Avg Value"]
+                    fig2 = px.bar(dw, x="Day", y="Avg Value",
+                                  title="Average by Day of Week",
+                                  color="Avg Value",
+                                  color_continuous_scale="Blues",
+                                  text_auto=".0f")
+                    fig2.update_layout(**cd(360))
+                    st.plotly_chart(fig2, use_container_width=True)
+
+                # Seasonality
+                month_names = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",
+                               7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
+                mth = d2.groupby("_Month")[val_col].mean().reset_index()
+                mth["Month Name"] = mth["_Month"].map(month_names)
+                mth.columns = ["Month Num", val_col, "Month"]
+                fig3 = px.bar(mth, x="Month", y=val_col,
+                              title="Seasonality — Average by Month",
+                              color=val_col,
+                              color_continuous_scale="Viridis",
+                              text_auto=".0f")
+                fig3.update_layout(**cd(380))
+                st.plotly_chart(fig3, use_container_width=True)
+
+                # Year-over-year
+                yoy = d2.groupby(["_Year","_Month"])[val_col].sum().reset_index()
+                fig4 = px.line(yoy, x="_Month", y=val_col, color="_Year",
+                               title="Year-over-Year Comparison by Month",
+                               labels={"_Month":"Month","_Year":"Year"},
+                               markers=True)
+                fig4.update_layout(**cd(400))
+                st.plotly_chart(fig4, use_container_width=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ENGINE 3 — PREDICTION ENGINE (ML)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_prediction(df, found, domain):
+    section("🤖 Prediction Engine", domain.lower())
+
+    st.markdown("""<div class="insight-box">
+    <strong>🤖 What does this do?</strong><br>
+    The Prediction Engine learns patterns from your historical data and predicts future outcomes.<br><br>
+    <strong>Examples:</strong><br>
+    &nbsp;&nbsp;👥 <em>Will this employee leave?</em> → Predicts attrition Yes/No<br>
+    &nbsp;&nbsp;💰 <em>What will next month's revenue be?</em> → Predicts a number<br>
+    &nbsp;&nbsp;🚨 <em>Is this transaction fraudulent?</em> → Predicts fraud probability<br>
+    &nbsp;&nbsp;📈 <em>What salary should this role have?</em> → Predicts salary range
+    </div>""", unsafe_allow_html=True)
+
+    try:
+        from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingClassifier, GradientBoostingRegressor
+        from sklearn.model_selection import train_test_split
+        from sklearn.preprocessing import LabelEncoder
+        from sklearn.metrics import (accuracy_score, classification_report,
+                                     mean_absolute_error, r2_score, roc_auc_score)
+        from sklearn.impute import SimpleImputer
+        sklearn_ok = True
+    except ImportError:
+        st.error("scikit-learn not installed. Add `scikit-learn>=1.3.2` to requirements.txt")
+        return
+
+    num_cols = df.select_dtypes(include="number").columns.tolist()
+    all_cols = list(df.columns)
+
+    # ── Step 1: Pick what to predict ──────────────────────────────────────
+    st.markdown("**① What do you want to predict?**")
+
+    # Domain-specific suggestions
+    DOMAIN_TARGETS = {
+        "HR":        {"Attrition (Will employee leave?)": found.get("attrition"),
+                      "Salary (What should salary be?)":  found.get("salary"),
+                      "Performance Rating":                found.get("performance")},
+        "Sales":     {"Revenue (Predict order value)":    found.get("sales"),
+                      "Profit (Predict profit)":          found.get("profit"),
+                      "Quantity (Predict units sold)":    found.get("quantity")},
+        "Marketing": {"Conversions (Will user convert?)": found.get("conversions"),
+                      "Revenue from campaign":            found.get("sales"),
+                      "CTR (Click-through rate)":         found.get("clicks")},
+        "Ecommerce": {"Returns (Will order be returned?)":found.get("returns"),
+                      "Revenue (Predict order value)":    found.get("sales"),
+                      "Delivery Time":                    found.get("delivery")},
+        "Retail":    {"Revenue (Predict transaction)":    found.get("sales"),
+                      "Profit (Predict profit)":          found.get("profit")},
+        "Fraud":     {"Fraud (Is transaction fraudulent?)":"auto_fraud"},
+        "Generic":   {},
+    }
+
+    suggestions = {k: v for k, v in DOMAIN_TARGETS.get(domain, {}).items() if v}
+    suggestion_labels = list(suggestions.keys()) + ["Custom — pick any column"]
+
+    pred_choice = st.selectbox("Choose what to predict:", suggestion_labels,
+                               key="pred_target_choice")
+
+    if pred_choice == "Custom — pick any column":
+        target_col = st.selectbox("Select target column:", all_cols, key="pred_target_custom")
+    elif pred_choice == "Fraud (Is transaction fraudulent?)":
+        cl = {c.lower().strip(): c for c in df.columns}
+        fraud_label_cols = ["class","label","fraud","is_fraud","isfraud","target"]
+        target_col = next((cl[c] for c in fraud_label_cols if c in cl), None)
+        if not target_col:
+            st.warning("No fraud label column found. Select manually.")
+            target_col = st.selectbox("Select target column:", all_cols, key="pred_fraud_col")
+    else:
+        target_col = suggestions.get(pred_choice)
+
+    if not target_col or target_col not in df.columns:
+        st.warning("Please select a valid target column.")
+        return
+
+    # ── Detect task type: Classification or Regression ────────────────────
+    target_series = df[target_col].dropna()
+    unique_vals = target_series.nunique()
+
+    # Check if binary/categorical
+    is_classification = (
+        unique_vals <= 10 or
+        target_series.dtype == object or
+        target_series.astype(str).str.lower().isin(
+            ["yes","no","true","false","1","0","fraud","legitimate",
+             "resigned","active","left","stayed"]).any()
+    )
+
+    task_type = "Classification" if is_classification else "Regression"
+    task_icon = "🎯" if is_classification else "📈"
+    st.info(f"{task_icon} **Task type auto-detected: {task_type}** — "
+            f"{'Predicting a category (Yes/No, Fraud/Legit)' if is_classification else 'Predicting a number (value, amount, salary)'}")
+
+    # ── Step 2: Feature selection ─────────────────────────────────────────
+    st.markdown("**② Which columns should the model learn from?**")
+    st.caption("Remove ID columns, names, or columns that would not be available at prediction time.")
+
+    # Auto-suggest features
+    exclude_always = {target_col}
+    # Exclude high-cardinality text and obvious ID columns
+    auto_exclude = set()
+    for col in df.columns:
+        if col == target_col: continue
+        if df[col].nunique() > 200 and df[col].dtype == object:
+            auto_exclude.add(col)
+        if any(k in col.lower() for k in ["id","name","email","phone","address","index"]):
+            auto_exclude.add(col)
+
+    default_features = [c for c in df.columns
+                        if c not in exclude_always and c not in auto_exclude][:20]
+
+    feature_cols = st.multiselect(
+        "Feature columns (what the model learns from):",
+        [c for c in df.columns if c != target_col],
+        default=default_features,
+        key="pred_features"
+    )
+
+    if len(feature_cols) < 1:
+        st.warning("Select at least 1 feature column.")
+        return
+
+    # ── Step 3: Model & training ──────────────────────────────────────────
+    st.markdown("**③ Choose model complexity:**")
+    model_choice = st.radio(
+        "Model:",
+        ["🌲 Random Forest (recommended — fast & accurate)",
+         "⚡ Gradient Boosting (slower but more accurate)",
+         "🔀 Compare Both"],
+        horizontal=True, key="pred_model"
+    )
+
+    test_size = st.slider("Test data % (held out for accuracy check):",
+                           10, 40, 20, key="pred_test_size")
+
+    run_btn = st.button("🚀 Train Model & Predict", type="primary", key="pred_run")
+
+    if not run_btn:
+        return
+
+    with st.spinner("🤖 Training model on your data..."):
+        try:
+            # Prepare data
+            df_model = df[feature_cols + [target_col]].copy()
+
+            # Encode target if classification
+            le_target = LabelEncoder()
+            if is_classification:
+                df_model[target_col] = (df_model[target_col].astype(str).str.lower()
+                    .map(lambda x: 1 if x in ["yes","true","1","fraud","resigned","left","terminated"] else
+                                   (x if x not in ["no","false","0","legitimate","active","stayed"] else 0)))
+                df_model[target_col] = pd.to_numeric(df_model[target_col], errors="coerce")
+
+            df_model = df_model.dropna(subset=[target_col])
+
+            # Encode categorical features
+            le_dict = {}
+            for col in feature_cols:
+                if df_model[col].dtype == object or df_model[col].dtype.name == "category":
+                    le = LabelEncoder()
+                    df_model[col] = le.fit_transform(df_model[col].astype(str).fillna("Unknown"))
+                    le_dict[col] = le
+
+            X = df_model[feature_cols]
+            y = df_model[target_col]
+
+            # Impute missing
+            imp = SimpleImputer(strategy="median")
+            X_imp = imp.fit_transform(X)
+
+            if len(X_imp) < 20:
+                st.error("Need at least 20 rows to train a model.")
+                return
+
+            X_train, X_test, y_train, y_test = train_test_split(
+                X_imp, y, test_size=test_size/100, random_state=42, 
+                stratify=y if is_classification and y.nunique() <= 10 else None)
+
+            def train_and_score(model_class_clf, model_class_reg, name):
+                if is_classification:
+                    model = model_class_clf(n_estimators=100, random_state=42, n_jobs=-1)
+                    model.fit(X_train, y_train)
+                    y_pred = model.predict(X_test)
+                    y_prob = model.predict_proba(X_test)[:,1] if hasattr(model,"predict_proba") else None
+                    acc = accuracy_score(y_test, y_pred) * 100
+                    try:
+                        auc = roc_auc_score(y_test, y_prob) if y_prob is not None else None
+                    except Exception:
+                        auc = None
+                    return model, {"name":name, "accuracy":acc, "auc":auc,
+                                   "y_pred":y_pred, "y_test":y_test, "y_prob":y_prob}
+                else:
+                    model = model_class_reg(n_estimators=100, random_state=42, n_jobs=-1)
+                    model.fit(X_train, y_train)
+                    y_pred = model.predict(X_test)
+                    mae  = mean_absolute_error(y_test, y_pred)
+                    r2   = r2_score(y_test, y_pred)
+                    mape = np.mean(np.abs((y_test - y_pred) / (y_test.replace(0, np.nan))) * 100)
+                    return model, {"name":name, "mae":mae, "r2":r2, "mape":mape,
+                                   "y_pred":y_pred, "y_test":y_test}
+
+            results = []
+            models  = []
+
+            if "Random Forest" in model_choice or "Compare" in model_choice:
+                m, r = train_and_score(RandomForestClassifier, RandomForestRegressor, "Random Forest")
+                models.append(m); results.append(r)
+
+            if "Gradient Boosting" in model_choice or "Compare" in model_choice:
+                m, r = train_and_score(GradientBoostingClassifier, GradientBoostingRegressor, "Gradient Boosting")
+                models.append(m); results.append(r)
+
+            best_idx = 0
+            if len(results) > 1:
+                if is_classification:
+                    best_idx = max(range(len(results)), key=lambda i: results[i]["accuracy"])
+                else:
+                    best_idx = max(range(len(results)), key=lambda i: results[i]["r2"])
+            best_model  = models[best_idx]
+            best_result = results[best_idx]
+
+        except Exception as e:
+            st.error(f"Training error: {e}")
+            return
+
+    # ── Results ───────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 📊 Model Results")
+
+    # Accuracy metrics
+    if is_classification:
+        acc = best_result["accuracy"]
+        auc = best_result.get("auc")
+        quality = "Excellent 🌟" if acc > 90 else "Good ✅" if acc > 75 else "Fair ⚠️" if acc > 60 else "Needs improvement ❌"
+        m1, m2, m3 = st.columns(3)
+        m1.metric("✅ Accuracy", f"{acc:.1f}%")
+        m2.metric("🎯 Quality", quality)
+        if auc: m3.metric("📊 AUC-ROC", f"{auc:.3f}")
+    else:
+        mae  = best_result["mae"]
+        r2   = best_result["r2"]
+        mape = best_result.get("mape", 0)
+        quality = "Excellent 🌟" if r2 > 0.9 else "Good ✅" if r2 > 0.7 else "Fair ⚠️" if r2 > 0.5 else "Needs improvement ❌"
+        m1, m2, m3 = st.columns(3)
+        m1.metric("📐 R² Score",  f"{r2:.3f}")
+        m2.metric("📏 Mean Abs Error", f"{mae:,.2f}")
+        m3.metric("🎯 Quality", quality)
+
+    # Model comparison
+    if len(results) > 1:
+        st.markdown("**Model Comparison:**")
+        comp_rows = []
+        for r in results:
+            if is_classification:
+                comp_rows.append({"Model": r["name"],
+                                  "Accuracy": f"{r['accuracy']:.1f}%",
+                                  "AUC-ROC": f"{r['auc']:.3f}" if r.get("auc") else "N/A",
+                                  "Winner": "🏆" if r["name"] == best_result["name"] else ""})
+            else:
+                comp_rows.append({"Model": r["name"],
+                                  "R² Score": f"{r['r2']:.3f}",
+                                  "Mean Abs Error": f"{r['mae']:,.2f}",
+                                  "Winner": "🏆" if r["name"] == best_result["name"] else ""})
+        st.dataframe(pd.DataFrame(comp_rows), use_container_width=True, hide_index=True)
+
+    # Prediction vs Actual chart
+    c1, c2 = st.columns(2)
+    y_test_arr  = np.array(best_result["y_test"])
+    y_pred_arr  = np.array(best_result["y_pred"])
+
+    with c1:
+        if not is_classification:
+            sample_n = min(200, len(y_test_arr))
+            idx = np.random.choice(len(y_test_arr), sample_n, replace=False)
+            fig = px.scatter(x=y_test_arr[idx], y=y_pred_arr[idx],
+                             title="Actual vs Predicted",
+                             labels={"x":"Actual","y":"Predicted"},
+                             opacity=0.6,
+                             color_discrete_sequence=[C["blue"]])
+            max_val = max(y_test_arr.max(), y_pred_arr.max())
+            fig.add_shape(type="line", x0=0, y0=0, x1=max_val, y1=max_val,
+                          line=dict(color="#94a3b8", dash="dash"))
+            fig.update_layout(**cd(380))
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            # Confusion matrix
+            from sklearn.metrics import confusion_matrix
+            cm_arr = confusion_matrix(y_test_arr, y_pred_arr)
+            labels = ["Negative","Positive"]
+            fig = px.imshow(cm_arr, text_auto=True,
+                            x=labels, y=labels,
+                            title="Confusion Matrix",
+                            color_continuous_scale="Blues",
+                            labels=dict(x="Predicted",y="Actual"))
+            fig.update_layout(**cd(360))
+            st.plotly_chart(fig, use_container_width=True)
+
+    with c2:
+        # Feature importance
+        if hasattr(best_model, "feature_importances_"):
+            fi = pd.DataFrame({
+                "Feature": feature_cols,
+                "Importance": best_model.feature_importances_
+            }).sort_values("Importance", ascending=False).head(15)
+
+            fig2 = px.bar(fi, x="Importance", y="Feature",
+                          orientation="h",
+                          title="🔑 Top Predictors (Feature Importance)",
+                          color="Importance",
+                          color_continuous_scale="Blues",
+                          text_auto=".3f")
+            fig2.update_layout(**cd(400), yaxis=dict(autorange="reversed"))
+            st.plotly_chart(fig2, use_container_width=True)
+
+    # ── Live Prediction Tool ───────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 🎯 Make a Live Prediction")
+    st.caption("Enter values for a new record and get an instant prediction.")
+
+    input_vals = {}
+    inp_cols = st.columns(3)
+    for i, col in enumerate(feature_cols[:12]):
+        with inp_cols[i % 3]:
+            col_data = df[col].dropna()
+            if col in le_dict:
+                options = list(le_dict[col].classes_)
+                sel = st.selectbox(f"{col}", options, key=f"pred_inp_{col}")
+                input_vals[col] = le_dict[col].transform([sel])[0]
+            elif pd.api.types.is_numeric_dtype(col_data):
+                val = st.number_input(f"{col}",
+                    value=float(col_data.median()),
+                    key=f"pred_inp_{col}",
+                    help=f"Typical range: {col_data.min():,.1f} – {col_data.max():,.1f}")
+                input_vals[col] = val
+            else:
+                val = st.text_input(f"{col}", value=str(col_data.mode().iloc[0]),
+                                    key=f"pred_inp_{col}")
+                input_vals[col] = 0  # fallback
+
+    if st.button("🔮 Predict", key="pred_live", type="primary"):
+        try:
+            input_arr = imp.transform([[input_vals.get(c, 0) for c in feature_cols]])
+            pred = best_model.predict(input_arr)[0]
+
+            if is_classification:
+                prob = best_model.predict_proba(input_arr)[0] if hasattr(best_model,"predict_proba") else None
+                pred_label = "YES ✅" if pred == 1 else "NO ❌"
+                conf = max(prob)*100 if prob is not None else None
+
+                if pred == 1:
+                    st.error(f"🔮 **Prediction: {pred_label}**" +
+                             (f" | Confidence: {conf:.1f}%" if conf else ""))
+                else:
+                    st.success(f"🔮 **Prediction: {pred_label}**" +
+                               (f" | Confidence: {conf:.1f}%" if conf else ""))
+            else:
+                st.success(f"🔮 **Predicted {target_col}: {pred:,.2f}**")
+
+        except Exception as e:
+            st.error(f"Prediction error: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ENGINE 4 — PRESCRIPTIVE INSIGHTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_prescriptive(df, found, domain):
+    section("💊 Prescriptive Insights — What Should You Do?", domain.lower())
+
+    st.markdown("""<div class="insight-box">
+    <strong>💊 What is Prescriptive Analysis?</strong><br>
+    It goes beyond "what happened" and "what will happen" — it tells you
+    <strong>what action to take</strong> based on your data patterns.<br>
+    Each recommendation is backed by specific numbers from your dataset.
+    </div>""", unsafe_allow_html=True)
+
+    recommendations = []
+
+    sc   = found.get("sales");   pc   = found.get("profit")
+    prd  = found.get("product"); cat  = found.get("category")
+    dc   = found.get("date");    qty  = found.get("quantity")
+    cus  = found.get("customer");reg  = found.get("region")
+    sal  = found.get("salary");  attr = found.get("attrition")
+    dept = found.get("department"); gen = found.get("gender")
+    dis  = found.get("discount"); ten  = found.get("tenure")
+    store= found.get("store");   pay  = found.get("payment")
+    imp  = found.get("impressions"); clk = found.get("clicks")
+    conv = found.get("conversions"); sp  = found.get("spend")
+    chan = found.get("channel");  ret  = found.get("returns")
+    del_ = found.get("delivery"); perf = found.get("performance")
+    sat  = found.get("satisfaction"); age = found.get("age")
+    emp  = found.get("employee_id") or found.get("employee_name")
+    job  = found.get("job_title")
+
+    # ── HR Prescriptions ──────────────────────────────────────────────────
+    if domain == "HR" or sal or attr:
+
+        if attr:
+            df2 = df.copy()
+            df2["_left"] = df2[attr].astype(str).str.lower().isin(
+                ["yes","true","1","resigned","terminated","left"])
+            rate = df2["_left"].mean() * 100
+
+            if rate > 20:
+                recommendations.append({
+                    "priority":"🔴 Critical","category":"Retention",
+                    "action":"Launch emergency retention programme immediately",
+                    "reason":f"Attrition rate is {rate:.1f}% — well above the 15% danger threshold.",
+                    "steps":["Conduct exit interviews for all leavers this quarter",
+                             "Implement immediate salary review for at-risk roles",
+                             "Introduce flexible work policies within 30 days",
+                             "Set up monthly manager 1:1s for flagged employees"]
+                })
+            elif rate > 12:
+                recommendations.append({
+                    "priority":"🟡 Warning","category":"Retention",
+                    "action":"Review retention strategy — attrition trending high",
+                    "reason":f"Attrition at {rate:.1f}% (healthy range: 8–12%).",
+                    "steps":["Identify top 3 departments by attrition",
+                             "Survey employee satisfaction scores",
+                             "Benchmark salaries against market rates"]
+                })
+
+            if dept:
+                da = df2.groupby(dept)["_left"].mean().mul(100)
+                worst_dept = da.idxmax()
+                worst_rate = da.max()
+                if worst_rate > 20:
+                    recommendations.append({
+                        "priority":"🔴 Critical","category":"Department Retention",
+                        "action":f"Immediate focus on {worst_dept} department",
+                        "reason":f"{worst_dept} has {worst_rate:.1f}% attrition — highest in the organisation.",
+                        "steps":[f"Urgent skip-level meetings in {worst_dept}",
+                                 "Review manager performance and team culture",
+                                 f"Consider salary adjustments for {worst_dept} roles",
+                                 "Check workload and overtime patterns"]
+                    })
+
+            if sal and dept:
+                df2_left   = df2[df2["_left"]==True]
+                df2_active = df2[df2["_left"]==False]
+                if len(df2_left) > 5 and len(df2_active) > 5:
+                    sal_left   = df2_left[sal].mean()
+                    sal_active = df2_active[sal].mean()
+                    if sal_left < sal_active * 0.9:
+                        gap = (sal_active - sal_left) / sal_active * 100
+                        recommendations.append({
+                            "priority":"🟡 Warning","category":"Compensation",
+                            "action":"Salary is a key attrition driver — review pay bands",
+                            "reason":f"Leavers earned {gap:.1f}% less on average than retained employees ({sal_left:,.0f} vs {sal_active:,.0f}).",
+                            "steps":["Identify roles where pay is below market",
+                                     "Create structured pay bands by level",
+                                     "Budget for retention bonuses for high performers"]
+                        })
+
+        if sal and dept:
+            ds = df.groupby(dept)[sal].mean().sort_values()
+            lowest_dept = ds.index[0]
+            lowest_sal  = ds.iloc[0]
+            highest_sal = ds.iloc[-1]
+            if highest_sal > lowest_sal * 2:
+                recommendations.append({
+                    "priority":"🟡 Warning","category":"Pay Equity",
+                    "action":"Large salary gap between departments — review pay equity",
+                    "reason":f"Highest paying dept earns {highest_sal/lowest_sal:.1f}× more than {lowest_dept} (avg {lowest_sal:,.0f}).",
+                    "steps":["Commission formal pay equity audit",
+                             "Establish minimum pay floors by function",
+                             "Review job grading structure"]
+                })
+
+        if gen and sal:
+            dg = df.copy()
+            dg["_g"] = dg[gen].astype(str).str.title()
+            ms = dg[dg["_g"].isin(["Male","M"])][sal].mean()
+            fs = dg[dg["_g"].isin(["Female","F"])][sal].mean()
+            if ms > 0 and fs > 0:
+                gap = abs(ms - fs) / max(ms, fs) * 100
+                if gap > 10:
+                    recommendations.append({
+                        "priority":"🟡 Warning","category":"Diversity & Inclusion",
+                        "action":f"Address gender pay gap of {gap:.1f}%",
+                        "reason":f"Male avg salary: {ms:,.0f} | Female avg: {fs:,.0f}. {gap:.1f}% gap detected.",
+                        "steps":["Conduct role-matched pay analysis",
+                                 "Set target to close gap within 2 years",
+                                 "Review promotion rates by gender",
+                                 "Publish gender pay gap report"]
+                    })
+
+        if ten and attr:
+            df2 = df.copy()
+            df2["_left"] = df2[attr].astype(str).str.lower().isin(
+                ["yes","true","1","resigned","terminated","left"])
+            early_leave = df2[df2[ten] < 2]["_left"].mean() * 100
+            if early_leave > 30:
+                recommendations.append({
+                    "priority":"🟡 Warning","category":"Onboarding",
+                    "action":"High early attrition — strengthen onboarding & first-year experience",
+                    "reason":f"{early_leave:.1f}% of employees with <2 years tenure have left.",
+                    "steps":["Implement structured 90-day onboarding plan",
+                             "Assign mentors to all new hires",
+                             "Conduct 6-month check-in surveys",
+                             "Review manager quality for new hire teams"]
+                })
+
+    # ── Sales Prescriptions ───────────────────────────────────────────────
+    if domain in ["Sales","Ecommerce","Retail"] or (sc and prd):
+
+        if sc and prd:
+            prod_rev = df.groupby(prd)[sc].sum().sort_values(ascending=False)
+            top_prod = prod_rev.head(3).index.tolist()
+            bot_prod = prod_rev.tail(3).index.tolist()
+            top_rev  = prod_rev.head(3).sum()
+            total_rev = prod_rev.sum()
+
+            if total_rev > 0 and top_rev / total_rev > 0.6:
+                recommendations.append({
+                    "priority":"🟡 Warning","category":"Product Risk",
+                    "action":"Reduce revenue concentration — top 3 products drive >60% of sales",
+                    "reason":f"Top 3 products ({', '.join(str(p) for p in top_prod)}) = {top_rev/total_rev*100:.0f}% of revenue.",
+                    "steps":["Invest in marketing for mid-tier products",
+                             "Bundle low performers with bestsellers",
+                             "Consider discontinuing persistent bottom 3",
+                             "Develop 2-3 new product lines"]
+                })
+
+            if pc:
+                prod_margin = (df.groupby(prd)[pc].sum() /
+                               df.groupby(prd)[sc].sum() * 100).sort_values()
+                neg_margin = prod_margin[prod_margin < 0]
+                if len(neg_margin) > 0:
+                    recommendations.append({
+                        "priority":"🔴 Critical","category":"Profitability",
+                        "action":f"Immediately review {len(neg_margin)} loss-making products",
+                        "reason":f"Products with negative margin: {', '.join(str(p) for p in neg_margin.index[:3])}",
+                        "steps":["Calculate true cost including overheads",
+                                 "Raise prices or negotiate better supplier terms",
+                                 "Consider product discontinuation",
+                                 "Review discount policy for these SKUs"]
+                    })
+
+        if sc and dis:
+            corr = df[[dis, sc]].dropna().corr().iloc[0, 1]
+            avg_dis = df[dis].mean()
+            if corr < -0.2 and avg_dis > 0.15:
+                recommendations.append({
+                    "priority":"🟡 Warning","category":"Discount Strategy",
+                    "action":"Discounts are hurting revenue — optimise discount policy",
+                    "reason":f"Discount-Revenue correlation: {corr:.2f} (negative). Avg discount: {avg_dis:.1%}.",
+                    "steps":["Cap maximum discount at 15% without manager approval",
+                             "Introduce value-based selling training",
+                             "Test discount-free campaigns for premium segments",
+                             "Track revenue impact per discount tier"]
+                })
+
+        if sc and reg:
+            reg_rev = df.groupby(reg)[sc].sum().sort_values()
+            bottom_reg = reg_rev.index[0]
+            bottom_val = reg_rev.iloc[0]
+            top_val    = reg_rev.iloc[-1]
+            if top_val > bottom_val * 3:
+                recommendations.append({
+                    "priority":"🔵 Opportunity","category":"Regional Growth",
+                    "action":f"Invest in {bottom_reg} — significant growth potential",
+                    "reason":f"{bottom_reg} generates only {bottom_val:,.0f} vs top region {top_val:,.0f} ({top_val/bottom_val:.1f}× more).",
+                    "steps":[f"Assign dedicated sales rep to {bottom_reg}",
+                             "Run targeted marketing campaign in underperforming regions",
+                             "Analyse competitor presence in these areas",
+                             "Consider pricing adjustments for regional markets"]
+                })
+
+        if sc and dc:
+            try:
+                d2 = df.copy()
+                d2[dc] = pd.to_datetime(d2[dc], errors="coerce")
+                d2 = d2.dropna(subset=[dc])
+                d2["_M"] = d2[dc].dt.to_period("M").astype(str)
+                monthly = d2.groupby("_M")[sc].sum()
+                if len(monthly) >= 3:
+                    last_3 = monthly.tail(3).mean()
+                    prev_3 = monthly.iloc[-6:-3].mean() if len(monthly) >= 6 else monthly.head(3).mean()
+                    if prev_3 > 0:
+                        trend = (last_3 - prev_3) / prev_3 * 100
+                        if trend < -10:
+                            recommendations.append({
+                                "priority":"🔴 Critical","category":"Revenue Trend",
+                                "action":"Revenue declining — immediate sales acceleration needed",
+                                "reason":f"Last 3 months avg {last_3:,.0f} vs previous period {prev_3:,.0f} ({trend:.1f}% decline).",
+                                "steps":["Launch emergency promotional campaign",
+                                         "Review sales team performance and pipeline",
+                                         "Identify and contact churned customers",
+                                         "Accelerate new product launches"]
+                            })
+                        elif trend > 20:
+                            recommendations.append({
+                                "priority":"🟢 Opportunity","category":"Growth Momentum",
+                                "action":"Strong growth momentum — scale up operations",
+                                "reason":f"Revenue grew {trend:.1f}% in last 3 months vs prior period.",
+                                "steps":["Increase inventory for top-selling products",
+                                         "Scale marketing spend proportionally",
+                                         "Hire additional sales capacity",
+                                         "Expand to adjacent markets"]
+                            })
+            except Exception:
+                pass
+
+    # ── Marketing Prescriptions ───────────────────────────────────────────
+    if domain == "Marketing" or (imp and clk):
+
+        if imp and clk and chan:
+            df2 = df.copy()
+            df2["_CTR"] = df2[clk] / df2[imp].replace(0, np.nan) * 100
+            chan_ctr = df2.groupby(chan)["_CTR"].mean().sort_values()
+            worst_chan = chan_ctr.index[0]
+            best_chan  = chan_ctr.index[-1]
+            if chan_ctr.iloc[-1] > chan_ctr.iloc[0] * 3:
+                recommendations.append({
+                    "priority":"🟡 Warning","category":"Channel Optimisation",
+                    "action":f"Reallocate budget from {worst_chan} to {best_chan}",
+                    "reason":f"{best_chan} CTR ({chan_ctr.iloc[-1]:.2f}%) is {chan_ctr.iloc[-1]/chan_ctr.iloc[0]:.1f}× better than {worst_chan} ({chan_ctr.iloc[0]:.2f}%).",
+                    "steps":[f"Reduce {worst_chan} budget by 30%",
+                             f"Increase {best_chan} budget by 30%",
+                             "Run A/B tests on underperforming channels",
+                             "Review audience targeting for low-CTR channels"]
+                })
+
+        if sp and sc:
+            total_sp  = df[sp].sum()
+            total_rev = df[sc].sum()
+            roas = total_rev / total_sp if total_sp > 0 else 0
+            if roas < 2:
+                recommendations.append({
+                    "priority":"🔴 Critical","category":"Marketing ROI",
+                    "action":"Marketing spend not generating sufficient returns",
+                    "reason":f"ROAS of {roas:.2f}× — industry benchmark is 4×. Spending {total_sp:,.0f} to generate {total_rev:,.0f}.",
+                    "steps":["Audit all active campaigns for ROI",
+                             "Pause campaigns with ROAS < 1×",
+                             "Invest in content and organic channels",
+                             "Improve landing page conversion rates"]
+                })
+
+    # ── Ecommerce Prescriptions ───────────────────────────────────────────
+    if domain == "Ecommerce" or ret or del_:
+
+        if ret:
+            df2 = df.copy()
+            df2["_ret"] = df2[ret].astype(str).str.lower().isin(["yes","true","1","returned"])
+            ret_rate = df2["_ret"].mean() * 100
+            if ret_rate > 10:
+                recommendations.append({
+                    "priority":"🟡 Warning","category":"Returns Reduction",
+                    "action":f"High return rate ({ret_rate:.1f}%) is eroding margins",
+                    "reason":f"{int(df2['_ret'].sum()):,} returns out of {len(df2):,} orders.",
+                    "steps":["Improve product descriptions and images",
+                             "Add size guides / fit recommendations",
+                             "Review quality control for high-return products",
+                             "Analyse return reasons from customer feedback"]
+                })
+
+        if del_:
+            avg_del = df[del_].mean()
+            if avg_del > 7:
+                slow_pct = (df[del_] > 7).mean() * 100
+                recommendations.append({
+                    "priority":"🟡 Warning","category":"Delivery Experience",
+                    "action":f"Delivery too slow — {slow_pct:.0f}% of orders take >7 days",
+                    "reason":f"Average delivery time: {avg_del:.1f} days. Customer expectation: 3–5 days.",
+                    "steps":["Negotiate SLA improvements with logistics partners",
+                             "Add regional warehouses for slow zones",
+                             "Offer express delivery as premium option",
+                             "Proactively notify customers of delays"]
+                })
+
+    # ── Fraud Prescriptions ───────────────────────────────────────────────
+    if domain == "Fraud":
+        cl = {c.lower().strip(): c for c in df.columns}
+        fraud_label_cols = ["class","label","fraud","is_fraud","isfraud","target"]
+        cc = next((cl[c] for c in fraud_label_cols if c in cl), None)
+        if cc:
+            df2 = df.copy()
+            df2["_lbl"] = df2[cc].astype(str).str.lower().map(
+                lambda x: 1 if x in ["1","true","yes","fraud"] else 0)
+            rate = df2["_lbl"].mean() * 100
+            amt_col = cl.get("amount")
+
+            if rate > 0.5:
+                exposure = f" Estimated exposure: ${df2[df2['_lbl']==1][amt_col].sum():,.2f}." if amt_col else ""
+                recommendations.append({
+                    "priority":"🔴 Critical","category":"Fraud Prevention",
+                    "action":"Deploy real-time fraud detection rules immediately",
+                    "reason":f"Fraud rate: {rate:.3f}%.{exposure}",
+                    "steps":["Implement velocity checks (multiple transactions in short time)",
+                             "Add device fingerprinting and IP reputation scoring",
+                             "Set up transaction amount thresholds for manual review",
+                             "Deploy ML model in production for real-time scoring",
+                             "Create fraud operations team for case management"]
+                })
+
+            if amt_col:
+                fa = df2[df2["_lbl"]==1][amt_col]
+                la = df2[df2["_lbl"]==0][amt_col]
+                if len(fa) > 5 and fa.mean() > la.mean() * 1.5:
+                    recommendations.append({
+                        "priority":"🟡 Warning","category":"Transaction Monitoring",
+                        "action":"Flag high-value transactions for enhanced scrutiny",
+                        "reason":f"Fraud avg: ${fa.mean():,.2f} vs legitimate avg: ${la.mean():,.2f} ({fa.mean()/la.mean():.1f}× higher).",
+                        "steps":[f"Set alert threshold at ${la.mean()*2:,.0f}",
+                                 "Require step-up authentication for large transactions",
+                                 "Implement 24hr hold for first-time high-value purchases"]
+                    })
+
+    # ── Generic / Cross-domain ────────────────────────────────────────────
+    if not recommendations:
+        # Generic recommendations based on data quality
+        missing_severe = [c for c in df.columns if df[c].isna().mean() > 0.3]
+        if missing_severe:
+            recommendations.append({
+                "priority":"🟡 Warning","category":"Data Quality",
+                "action":"Improve data collection for key columns",
+                "reason":f"{len(missing_severe)} columns have >30% missing data: {', '.join(missing_severe[:5])}",
+                "steps":["Audit data collection processes",
+                         "Make critical fields mandatory in source systems",
+                         "Implement data validation at entry point"]
+            })
+        recommendations.append({
+            "priority":"🔵 Info","category":"Analysis",
+            "action":"Upload domain-specific data for targeted recommendations",
+            "reason":"Generic dataset detected — domain-specific recommendations need Sales, HR, or Marketing data.",
+            "steps":["Ensure column names reflect their content",
+                     "Use Column Mapping panel to map key columns",
+                     "Try uploading sample data from your business domain"]
+        })
+
+    # ── Render recommendations ─────────────────────────────────────────────
+    priority_order = ["🔴 Critical","🟡 Warning","🔵 Opportunity","🟢 Opportunity",
+                      "🔵 Info","🟢 Info"]
+    recommendations.sort(key=lambda x: priority_order.index(x["priority"])
+                         if x["priority"] in priority_order else 99)
+
+    st.markdown(f"**{len(recommendations)} recommendations generated from your data:**")
+
+    PRIORITY_COLORS = {
+        "🔴 Critical":    "#7f1d1d",
+        "🟡 Warning":     "#78350f",
+        "🔵 Opportunity": "#1e3a5f",
+        "🟢 Opportunity": "#052e16",
+        "🔵 Info":        "#1e3a5f",
+        "🟢 Info":        "#052e16",
+    }
+    PRIORITY_BORDERS = {
+        "🔴 Critical":    "#ef4444",
+        "🟡 Warning":     "#f59e0b",
+        "🔵 Opportunity": "#3b82f6",
+        "🟢 Opportunity": "#22c55e",
+        "🔵 Info":        "#3b82f6",
+        "🟢 Info":        "#22c55e",
+    }
+
+    for i, rec in enumerate(recommendations):
+        border = PRIORITY_BORDERS.get(rec["priority"], "#64748b")
+        bg     = PRIORITY_COLORS.get(rec["priority"], "#1a1a2e")
+
+        with st.expander(
+            f"{rec['priority']} | {rec['category']} — {rec['action']}", expanded=(i < 3)):
+            st.markdown(f"""<div style="background:{bg};border-left:4px solid {border};
+                border-radius:8px;padding:14px 18px;margin-bottom:10px">
+                <div style="color:#e2e8f0;font-size:.92rem">
+                <strong>📊 Why:</strong> {rec['reason']}</div>
+                </div>""", unsafe_allow_html=True)
+
+            st.markdown("**✅ Action Steps:**")
+            for j, step in enumerate(rec["steps"], 1):
+                st.markdown(f"&nbsp;&nbsp;{j}. {step}")
+
+    # ── Download action plan ───────────────────────────────────────────────
+    st.markdown("---")
+    if st.button("📥 Download Action Plan as CSV", key="presc_download"):
+        rows = []
+        for rec in recommendations:
+            for j, step in enumerate(rec["steps"], 1):
+                rows.append({
+                    "Priority":   rec["priority"],
+                    "Category":   rec["category"],
+                    "Action":     rec["action"],
+                    "Reason":     rec["reason"],
+                    "Step Number": j,
+                    "Step":       step
+                })
+        csv = pd.DataFrame(rows).to_csv(index=False).encode()
+        st.download_button("⬇️ Download CSV", data=csv,
+                           file_name="action_plan.csv", mime="text/csv",
+                           key="presc_dl_btn")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 def main():
@@ -3006,6 +4363,10 @@ def main():
         f'{len(df):,} rows × {len(df.columns)} cols &nbsp;|&nbsp; '
         f'Detected: <code>{"</code> <code>".join(found.keys())}</code></span>',
         unsafe_allow_html=True)
+
+    # ── Anomaly Detection Banner (runs immediately on load) ─────────────
+    anomalies = detect_anomalies(df, found, domain)
+    render_anomaly_banner(anomalies, domain)
 
     # ── Override Panel ────────────────────────────────────────────────────
     # ── Column Mapping Panel ─────────────────────────────────────────────
@@ -3180,6 +4541,9 @@ def main():
     elif domain=="Fraud":       render_fraud(df, found)
     else:                       render_generic(df, found)
 
+    render_eda(df, found, domain)
+    render_prediction(df, found, domain)
+    render_prescriptive(df, found, domain)
     render_calc_engine(df, found, domain)
     render_summary(df, found, domain)
     render_qa(df, domain, found)
