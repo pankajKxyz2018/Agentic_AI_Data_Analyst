@@ -2179,39 +2179,140 @@ def main():
         unsafe_allow_html=True)
 
     # ── Override Panel ────────────────────────────────────────────────────
-    with st.expander("⚙️ Override Column Mapping & Domain (if charts missing)", expanded=False):
-        all_c = ["— not mapped —"]+list(df.columns)
-        num_c = ["— not mapped —"]+df.select_dtypes(include="number").columns.tolist()
-        oc1,oc2=st.columns(2)
-        with oc1:
-            domain=st.selectbox("🎯 Domain",
-                ["Sales","Marketing","HR","Ecommerce","Retail","Fraud","Generic"],
-                index=["Sales","Marketing","HR","Ecommerce","Retail","Fraud","Generic"].index(domain))
-        key_fields={
-            "sales":("💰 Revenue/Sales col",num_c), "profit":("🏆 Profit col",num_c),
-            "quantity":("📦 Quantity col",num_c),   "discount":("🏷 Discount col",num_c),
-            "date":("📅 Date col",all_c),            "product":("🛒 Product col",all_c),
-            "category":("🗂 Category col",all_c),    "region":("🌍 Region col",all_c),
-            "customer":("👥 Customer col",all_c),    "department":("🏢 Department col",all_c),
-            "salary":("💰 Salary col",num_c),        "gender":("⚧ Gender col",all_c),
-            "attrition":("📉 Attrition col",all_c),  "tenure":("📅 Tenure col",num_c),
-        }
-        rc=st.columns(3)
-        for i,(key,(lbl,opts)) in enumerate(key_fields.items()):
-            cur=found.get(key,"— not mapped —")
-            idx=opts.index(cur) if cur in opts else 0
-            chosen=rc[i%3].selectbox(lbl,opts,index=idx,key=f"ov_{key}")
-            if chosen!="— not mapped —": found[key]=chosen
-            elif key in found and chosen=="— not mapped —": del found[key]
+    # ── Column Mapping Panel ─────────────────────────────────────────────
+    with st.expander("⚙️ Column Mapping & Domain Override", expanded=False):
+
+        st.markdown("**🎯 Domain Detection**")
+        domain_list = ["Sales","Marketing","HR","Ecommerce","Retail","Fraud","Generic"]
+        domain = st.selectbox("Detected Domain — change if wrong:",
+            domain_list, index=domain_list.index(domain), key="domain_override")
+
         st.markdown("---")
-        st.markdown("**Detected Mappings:**")
-        st.dataframe(pd.DataFrame({"Key":list(found.keys()),"Column":list(found.values())}),
-                     use_container_width=True,hide_index=True)
-        st.markdown("**All Columns & Types:**")
-        td=pd.DataFrame({"Column":df.columns,
-                          "Type":[str(df[c].dtype) for c in df.columns],
-                          "Sample":[str(df[c].dropna().iloc[0]) if len(df[c].dropna())>0 else "" for c in df.columns]})
-        st.dataframe(td,use_container_width=True,hide_index=True)
+        st.markdown(
+            "**🔗 Column Mappings** — auto-detected below. "
+            "Change any dropdown if the engine picked the wrong column. "
+            "Set to *— not mapped —* to remove a mapping.")
+
+        # All dataset columns available for selection
+        NONE = "— not mapped —"
+        all_c = [NONE] + list(df.columns)
+        num_c = [NONE] + df.select_dtypes(include="number").columns.tolist()
+        cat_c = [NONE] + df.select_dtypes(include=["object","category"]).columns.tolist()
+        dt_c  = [NONE] + [c for c in df.columns
+                          if pd.api.types.is_datetime64_any_dtype(df[c])
+                          or any(k in c.lower() for k in ["date","time","month","year","period"])]
+
+        # Full key catalogue — label, options list, section
+        KEY_CATALOGUE = {
+            # ── Sales / Revenue ──────────────────────────────────────────
+            "sales":       ("Revenue / Sales Amount",    num_c, "💼 Sales & Revenue"),
+            "profit":      ("Profit / Net Income",       num_c, "💼 Sales & Revenue"),
+            "quantity":    ("Quantity / Units Sold",     num_c, "💼 Sales & Revenue"),
+            "discount":    ("Discount / Promo Amount",   num_c, "💼 Sales & Revenue"),
+            "price":       ("Unit Price",                num_c, "💼 Sales & Revenue"),
+            "cost":        ("Unit Cost / COGS",          num_c, "💼 Sales & Revenue"),
+            # ── Dimensions ───────────────────────────────────────────────
+            "date":        ("Date / Transaction Date",   dt_c,  "📅 Dimensions"),
+            "product":     ("Product Name",              all_c, "📅 Dimensions"),
+            "category":    ("Category / Product Group",  all_c, "📅 Dimensions"),
+            "sub_category":("Sub-Category",              all_c, "📅 Dimensions"),
+            "region":      ("Region / Territory",        all_c, "📅 Dimensions"),
+            "city":        ("City",                      all_c, "📅 Dimensions"),
+            "state":       ("State / Province",          all_c, "📅 Dimensions"),
+            "country":     ("Country",                   all_c, "📅 Dimensions"),
+            "customer":    ("Customer Name / ID",        all_c, "📅 Dimensions"),
+            "segment":     ("Customer Segment",          all_c, "📅 Dimensions"),
+            "ship_mode":   ("Shipping Mode",             all_c, "📅 Dimensions"),
+            "order_id":    ("Order ID",                  all_c, "📅 Dimensions"),
+            # ── HR ───────────────────────────────────────────────────────
+            "salary":      ("Salary / Compensation",     num_c, "👥 HR"),
+            "department":  ("Department / Division",     all_c, "👥 HR"),
+            "gender":      ("Gender",                    all_c, "👥 HR"),
+            "age":         ("Age",                       num_c, "👥 HR"),
+            "age_group":   ("Age Group / Band",          all_c, "👥 HR"),
+            "tenure":      ("Tenure / Years of Service", num_c, "👥 HR"),
+            "attrition":   ("Attrition / Left Company",  all_c, "👥 HR"),
+            "job_title":   ("Job Title / Designation",   all_c, "👥 HR"),
+            "hire_date":   ("Hire / Joining Date",       dt_c,  "👥 HR"),
+            "performance": ("Performance Rating",        all_c, "👥 HR"),
+            "education":   ("Education Level",           all_c, "👥 HR"),
+            "employee_id": ("Employee ID",               all_c, "👥 HR"),
+            "employee_name":("Employee Name",            all_c, "👥 HR"),
+            # ── Marketing ────────────────────────────────────────────────
+            "spend":       ("Ad Spend / Marketing Cost", num_c, "📣 Marketing"),
+            "channel":     ("Marketing Channel",         all_c, "📣 Marketing"),
+            "impressions": ("Impressions / Views",       num_c, "📣 Marketing"),
+            "clicks":      ("Clicks",                    num_c, "📣 Marketing"),
+            "conversions": ("Conversions / Leads",       num_c, "📣 Marketing"),
+            "roi":         ("ROI / ROAS",                num_c, "📣 Marketing"),
+            # ── Ecommerce / Retail ────────────────────────────────────────
+            "store":       ("Store / Branch Name",       all_c, "🏪 Retail"),
+            "payment":     ("Payment Method",            all_c, "🏪 Retail"),
+            "delivery":    ("Delivery / Shipping Days",  num_c, "🏪 Retail"),
+            "returns":     ("Returns / Refund Status",   all_c, "🏪 Retail"),
+            "satisfaction":("Satisfaction / Rating",     num_c, "🏪 Retail"),
+            "distribution_channel":("Distribution Channel", all_c, "🏪 Retail"),
+        }
+
+        # Group keys by section
+        sections = {}
+        for key,(lbl,opts,sec) in KEY_CATALOGUE.items():
+            sections.setdefault(sec, []).append((key, lbl, opts))
+
+        # Render one section at a time
+        for sec_name, keys in sections.items():
+            st.markdown(f"**{sec_name}**")
+            cols = st.columns(3)
+            for i,(key,lbl,opts) in enumerate(keys):
+                cur = found.get(key, NONE)
+                # Safety: if auto-detected value not in opts list, show NONE
+                safe_cur = cur if cur in opts else NONE
+                idx = opts.index(safe_cur)
+                chosen = cols[i%3].selectbox(
+                    f"{lbl}",
+                    opts,
+                    index=idx,
+                    key=f"ov_{key}",
+                    help=f"Auto-detected: {cur if cur != NONE else 'not detected'}"
+                )
+                if chosen != NONE:
+                    found[key] = chosen
+                elif key in found:
+                    del found[key]
+
+        # ── Duplicate Warning ─────────────────────────────────────────────
+        st.markdown("---")
+        col_usage = {}
+        for k, v in found.items():
+            col_usage.setdefault(v, []).append(k)
+        dupes = {col: keys for col, keys in col_usage.items() if len(keys) > 1}
+        if dupes:
+            dupe_lines = [f"- **{dcol}** mapped to keys: {', '.join(dkeys)}" for dcol,dkeys in dupes.items()]
+            st.warning("Duplicate mapping detected — same dataset column assigned to multiple keys. Please fix above.\n" + "\n".join(dupe_lines))
+
+        # ── Summary Table ──────────────────────────────────────────────────
+        st.markdown("**✅ Active Mappings (auto-detected + your overrides):**")
+        if found:
+            rows = []
+            for k, v in sorted(found.items()):
+                dtype = str(df[v].dtype)
+                sample = str(df[v].dropna().iloc[0]) if len(df[v].dropna()) > 0 else ""
+                rows.append({"Mapping Key": k, "Dataset Column": v,
+                             "Type": dtype, "Sample Value": sample[:40]})
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No columns mapped yet.")
+
+        # ── All Columns Reference ─────────────────────────────────────────
+        with st.expander("📋 View all dataset columns", expanded=False):
+            td = pd.DataFrame({
+                "Column":       df.columns,
+                "Type":         [str(df[c].dtype) for c in df.columns],
+                "Non-Null %":   [f"{df[c].notna().mean()*100:.0f}%" for c in df.columns],
+                "Unique Values":[f"{df[c].nunique():,}" for c in df.columns],
+                "Sample":       [str(df[c].dropna().iloc[0])[:40] if len(df[c].dropna())>0 else "" for c in df.columns],
+            })
+            st.dataframe(td, use_container_width=True, hide_index=True)
 
     with st.expander("🔍 Preview Raw Data"):
         st.dataframe(df.head(50),use_container_width=True)
