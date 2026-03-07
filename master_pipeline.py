@@ -244,8 +244,13 @@ def detect_columns(df):
                 found[key]=col; break
 
     # Pass 4: last-resort sales = largest sum numeric col
-    if "sales" not in found and num_cols:
-        found["sales"] = max(num_cols, key=lambda c: df[c].sum())
+    # Skip if this looks like an HR dataset (salary already found)
+    if "sales" not in found and num_cols and "salary" not in found:
+        # Only assign if column name has sales-like keywords
+        sale_kws = ["sale","revenue","amount","total","price","value","turnover","income","gross","profit"]
+        candidate = max(num_cols, key=lambda c: df[c].sum())
+        if any(kw in norm(candidate) for kw in sale_kws):
+            found["sales"] = candidate
 
     # Pass 5: date fallback
     if "date" not in found:
@@ -296,16 +301,16 @@ def detect_domain(df, found):
     if any(k in h for k in ["campaign","ctr","cpm","roas","utm"]): scores["Marketing"]+=3
     if "distribution_channel" in keys and "impressions" not in keys: scores["Marketing"]-=2
 
-    if "salary"     in keys: scores["HR"]+=5
-    if "attrition"  in keys: scores["HR"]+=5
+    if "salary"     in keys: scores["HR"]+=6; scores["Sales"]-=4
+    if "attrition"  in keys: scores["HR"]+=6; scores["Sales"]-=3
     if "department" in keys: scores["HR"]+=3
-    if "tenure"     in keys: scores["HR"]+=3
+    if "tenure"     in keys: scores["HR"]+=4
     if "gender"     in keys: scores["HR"]+=3
     if "age"        in keys: scores["HR"]+=2
-    if "employee_id"in keys: scores["HR"]+=4
-    if "job_title"  in keys: scores["HR"]+=3
-    if "hire_date"  in keys: scores["HR"]+=3
-    if any(k in h for k in ["employee","headcount","payroll","hire","appraisal"]): scores["HR"]+=3
+    if "employee_id"in keys: scores["HR"]+=5; scores["Sales"]-=3
+    if "job_title"  in keys: scores["HR"]+=4
+    if "hire_date"  in keys: scores["HR"]+=4
+    if any(k in h for k in ["employee","headcount","payroll","hire","appraisal"]): scores["HR"]+=4
 
     if "delivery"in keys: scores["Ecommerce"]+=4
     if "returns" in keys: scores["Ecommerce"]+=4
@@ -1339,6 +1344,34 @@ def render_summary(df, found, domain):
                     lines+=[f"- **Avg Fraud Amount:** ${fa.mean():,.2f}",
                             f"- **Total Fraud Exposure:** ${fa.sum():,.2f}",
                             f"- **Avg Legitimate Amount:** ${la.mean():,.2f}"]
+    elif domain == "HR":
+        # HR summary — only HR-relevant fields, never revenue/sales language
+        total_emp = df[emp].nunique() if emp else len(df)
+        lines.append(f"- **Total Employees:** {total_emp:,}")
+        if dept:  lines.append(f"- **Departments:** {df[dept].nunique():,}")
+        if sal:
+            lines+=[f"- **Total Payroll:** {df[sal].sum():,.0f}",
+                    f"- **Avg Salary:** {df[sal].mean():,.0f}",
+                    f"- **Median Salary:** {df[sal].median():,.0f}",
+                    f"- **Salary Range:** {df[sal].min():,.0f} – {df[sal].max():,.0f}"]
+        if gen:
+            gc=df[gen].astype(str).str.title().value_counts()
+            m=gc.get("Male",gc.get("M",0)); f=gc.get("Female",gc.get("F",0))
+            lines.append(f"- **Gender Split:** {int(m):,} Male / {int(f):,} Female")
+            if sal:
+                dg=df.copy(); dg["_g"]=dg[gen].astype(str).str.title()
+                ms=dg[dg["_g"].isin(["Male","M"])][sal].mean()
+                fs=dg[dg["_g"].isin(["Female","F"])][sal].mean()
+                if ms>0 and fs>0:
+                    gap=abs(ms-fs)/max(ms,fs)*100
+                    lines.append(f"- **Gender Pay Gap:** {gap:.1f}%")
+        if attr:
+            rate=df[attr].astype(str).str.lower().isin(["yes","true","1","resigned","terminated","left"]).mean()*100
+            lines.append(f"- **Attrition Rate:** {rate:.1f}%")
+        if ten:  lines.append(f"- **Avg Tenure:** {df[ten].mean():.1f} years")
+        if dc:
+            dd=pd.to_datetime(df[dc],errors="coerce").dropna()
+            if len(dd): lines.append(f"- **Date Range:** {dd.min().date()} → {dd.max().date()}")
     else:
         if sc:
             lines+=[f"- **Total Revenue:** {df[sc].sum():,.2f}",
@@ -1359,10 +1392,6 @@ def render_summary(df, found, domain):
             lines+=[f"- **Total Payroll:** {df[sal].sum():,.0f}",
                     f"- **Avg Salary:** {df[sal].mean():,.0f}",
                     f"- **Salary Range:** {df[sal].min():,.0f} – {df[sal].max():,.0f}"]
-        total_emp=df[emp].nunique() if emp else len(df)
-        if domain=="HR": lines.append(f"- **Total Employees:** {total_emp:,}")
-        if dept and domain=="HR":
-            lines.append(f"- **Departments:** {df[dept].nunique():,}")
         if attr:
             rate=df[attr].astype(str).str.lower().isin(["yes","true","1","resigned","terminated","left"]).mean()*100
             lines.append(f"- **Attrition Rate:** {rate:.1f}%")
@@ -1425,6 +1454,8 @@ def render_qa(df, domain, found):
                 qa.append(("📊 Is dataset balanced?",
                     f"Only **{pct:.4f}%** fraud — heavily imbalanced. "
                     "For ML: use SMOTE, class weights, or anomaly detection models."))
+        elif domain == "HR":
+            pass  # HR gets only HR Q&A below, no revenue questions
         else:
             if sc:
                 total=df[sc].sum(); avg=df[sc].mean(); mx=df[sc].max()
@@ -1582,12 +1613,12 @@ def compute_nlq_answer(question, df, found, domain):
     note = f" (filtered: {len(dff):,} of {len(df):,} records)" if len(dff) < len(df) else ""
     answers = []
 
-    # Revenue
-    if sc and any(k in q for k in ["revenue","sales","total","income","how much","made"]):
+    # Revenue — only for non-HR domains (salary column should not become "revenue")
+    if sc and domain != "HR" and any(k in q for k in ["revenue","sales","total","income","how much","made"]):
         answers.append(f"**Total Revenue{note}:** {dff[sc].sum():,.2f} | Avg: {dff[sc].mean():,.2f}")
 
     # Profit
-    if pc and any(k in q for k in ["profit","margin","earning","net"]):
+    if pc and domain != "HR" and any(k in q for k in ["profit","margin","earning","net"]):
         p = dff[pc].sum()
         mg = f" | Margin: {p/dff[sc].sum()*100:.1f}%" if sc and dff[sc].sum() > 0 else ""
         answers.append(f"**Total Profit{note}:** {p:,.2f}{mg}")
@@ -1764,8 +1795,8 @@ def compute_nlq_answer(question, df, found, domain):
 
     # Average
     if any(k in q for k in ["average","mean","avg","typical"]):
-        if sc:  answers.append(f"**Avg Revenue per Record:** {dff[sc].mean():,.2f}")
-        if pc:  answers.append(f"**Avg Profit per Record:** {dff[pc].mean():,.2f}")
+        if sc and domain != "HR":  answers.append(f"**Avg Revenue per Record:** {dff[sc].mean():,.2f}")
+        if pc and domain != "HR":  answers.append(f"**Avg Profit per Record:** {dff[pc].mean():,.2f}")
         if qty: answers.append(f"**Avg Units per Order:** {dff[qty].mean():,.1f}")
         if sal: answers.append(f"**Avg Salary:** {dff[sal].mean():,.0f}")
 
