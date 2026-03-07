@@ -2499,211 +2499,306 @@ def _apply_calculation(df, calc_type, params, found):
 
 
 def render_calc_engine(df, found, domain):
-    """Full DAX-style calculated columns panel."""
+    """Full DAX-style calculated columns panel — non-tech friendly."""
     section("🧮 Calculated Columns Engine", domain.lower())
 
+    # ── Plain English intro ───────────────────────────────────────────────
     st.markdown("""<div class="insight-box">
-    <strong>🧮 Build calculated columns like DAX in Power BI.</strong><br>
-    Use <strong>Quick Presets</strong> for common domain calculations (tenure, salary hike, margin %) —
-    or build a <strong>Custom Formula</strong> using any two columns from your dataset.
-    Results can be added as a new column, shown as a chart, or included in the summary.
+    <strong>🧮 What does this do?</strong><br><br>
+    Think of this as a <strong>smart calculator for your entire dataset</strong>.<br>
+    You pick what you want to calculate — the engine does it for every row automatically.<br><br>
+    <strong>Examples:</strong><br>
+    &nbsp;&nbsp;📅 <em>Date of Exit − Date of Joining</em> → gives each employee's <strong>Tenure in Years</strong><br>
+    &nbsp;&nbsp;💰 <em>Salary × 1.10</em> → gives each employee's <strong>Salary after 10% Hike</strong><br>
+    &nbsp;&nbsp;📊 <em>Profit ÷ Revenue × 100</em> → gives each record's <strong>Profit Margin %</strong><br><br>
+    Results appear as new charts and can be downloaded as a new CSV column.
     </div>""", unsafe_allow_html=True)
 
     # Session state for calculated columns
     if "calc_columns" not in st.session_state:
-        st.session_state.calc_columns = {}  # {output_col: Series}
+        st.session_state.calc_columns = {}
+
+    n_done = len(st.session_state.calc_columns)
+    if n_done > 0:
+        st.success(f"✅ {n_done} calculated column(s) ready — see **Results & Charts** tab")
 
     tab_preset, tab_custom, tab_results = st.tabs(
-        ["⚡ Quick Presets", "🔧 Custom Formula Builder", "📊 Results & Charts"])
+        [f"⚡ Step 1 — Ready-Made Calculations ({domain})",
+         "🔧 Step 2 — Build Your Own Calculation",
+         f"📊 Step 3 — View Results {'✅' if n_done > 0 else ''}"])
 
-    # ── TAB 1: PRESETS ────────────────────────────────────────────────────
+    # ── TAB 1: PRESETS (friendly cards) ───────────────────────────────────
     with tab_preset:
         presets = DOMAIN_PRESETS.get(domain, [])
+
         if not presets:
-            st.info(f"No presets defined for {domain} domain yet. Use Custom Formula Builder.")
+            st.info(f"No ready-made calculations for the {domain} domain. "
+                    "Go to Step 2 to build your own.")
         else:
-            st.markdown(f"**{len(presets)} preset calculations for {domain} domain:**")
-            # Show in grid
+            st.markdown(f"**Click any calculation below to run it on your data instantly.**")
+            st.caption("Green tick = already calculated. Warning = required column not mapped yet.")
+            st.markdown("")
+
             cols_g = st.columns(3)
             for i, p in enumerate(presets):
                 with cols_g[i % 3]:
-                    st.markdown(f"""<div class="insight-box">
-                    <strong>{p['icon']} {p['name']}</strong><br>
-                    <span style="font-size:.82rem;color:#94a3b8">{p['description']}</span>
-                    </div>""", unsafe_allow_html=True)
+                    already_done = p["output_col"] in st.session_state.calc_columns
 
-                    # Check if required columns are mapped
-                    can_run = True
-                    missing = []
+                    # Check required columns
+                    can_run = True; missing = []
                     pt = p["type"]; pp = p["params"]
                     needed_keys = []
                     if pt == "date_diff":
                         needed_keys = [pp.get("start_key")]
-                    elif pt in ["formula", "bin", "percentile_bin", "above_avg_flag", "threshold_flag"]:
+                    elif pt in ["formula","bin","percentile_bin","above_avg_flag","threshold_flag"]:
                         needed_keys = [pp.get("col_key")]
                     elif pt == "ratio":
                         needed_keys = [pp.get("num_key"), pp.get("den_key")]
-                    elif pt in ["two_col_multiply", "net_after_discount"]:
+                    elif pt in ["two_col_multiply","net_after_discount"]:
                         needed_keys = [pp.get("col1_key") or pp.get("revenue_key"),
                                        pp.get("col2_key") or pp.get("discount_key")]
                     for nk in needed_keys:
                         if nk and not found.get(nk):
-                            can_run = False
-                            missing.append(nk)
+                            can_run = False; missing.append(nk)
 
-                    if not can_run:
-                        st.caption(f"⚠️ Needs mapped: {', '.join(missing)}")
+                    # Status colour
+                    status_color = "#16a34a" if already_done else ("#b45309" if not can_run else "#1e40af")
+                    status_icon  = "✅" if already_done else ("⚠️" if not can_run else "▶️")
+
+                    st.markdown(f"""<div style="border:1px solid #2d3748;border-radius:10px;
+                        padding:12px 14px;margin-bottom:6px;background:#0f172a">
+                        <div style="font-size:.95rem;font-weight:700;color:#e2e8f0">
+                            {p['icon']} {p['name']}</div>
+                        <div style="font-size:.78rem;color:#94a3b8;margin-top:3px">
+                            {p['description']}</div>
+                        <div style="font-size:.75rem;color:{status_color};margin-top:5px">
+                            {status_icon} {'Already calculated' if already_done
+                              else ('Needs: ' + ', '.join(missing)) if not can_run
+                              else 'Ready to calculate'}</div>
+                        </div>""", unsafe_allow_html=True)
+
+                    if already_done:
+                        if st.button("🔄 Recalculate", key=f"preset_{i}", use_container_width=True):
+                            result, err = _apply_calculation(df, p["type"], p["params"], found)
+                            if not err:
+                                st.session_state.calc_columns[p["output_col"]] = result
+                                st.rerun()
+                    elif not can_run:
+                        st.caption(f"Map these columns first in Column Mapping above: **{', '.join(missing)}**")
                     else:
-                        btn_lbl = ("✅ Applied" if p["output_col"] in st.session_state.calc_columns
-                                   else "➕ Calculate")
-                        if st.button(btn_lbl, key=f"preset_{i}", use_container_width=True):
+                        if st.button(f"▶️ Calculate", key=f"preset_{i}", use_container_width=True,
+                                     type="primary"):
                             result, err = _apply_calculation(df, p["type"], p["params"], found)
                             if err:
-                                st.error(err)
+                                st.error(f"Error: {err}")
                             else:
                                 st.session_state.calc_columns[p["output_col"]] = result
-                                st.success(f"✅ '{p['output_col']}' calculated!")
+                                st.success(f"Done! '{p['output_col']}' added. Go to Results tab to see the chart.")
                                 st.rerun()
 
-        # Special: Date-diff preset with custom end column picker
+        # ── Custom Date Difference ────────────────────────────────────────
         st.markdown("---")
-        st.markdown("**📅 Custom Date Difference (e.g. Exit Date − Joining Date = Tenure)**")
-        date_cols = [c for c in df.columns
-                     if pd.api.types.is_datetime64_any_dtype(df[c])
-                     or any(k in c.lower() for k in ["date","time","joined","exit","left","end","start"])]
+        st.markdown("**📅 Calculate Days / Months / Years between two dates**")
+        st.caption("Common use: Tenure = Date of Exit − Date of Joining | Age = Today − Date of Birth")
+
         all_cols_list = list(df.columns)
-        dd_c1, dd_c2, dd_c3, dd_c4, dd_c5 = st.columns([2,2,1.5,2,1.5])
+        # Try to pre-detect date-like columns
+        date_like = [c for c in df.columns if any(k in c.lower()
+                     for k in ["date","time","joined","joining","exit","left","end","start","birth","dob"])]
+
+        dd_c1, dd_c2, dd_c3, dd_c4, dd_c5 = st.columns([2, 2, 1.5, 2, 1.5])
         with dd_c1:
-            dd_start = st.selectbox("Start Date Column", all_cols_list,
-                                    index=all_cols_list.index(found["hire_date"])
-                                    if found.get("hire_date") in all_cols_list else 0,
-                                    key="dd_start")
+            st.caption("**FROM date** (the earlier/start date)")
+            dd_start_default = (all_cols_list.index(found["hire_date"])
+                                if found.get("hire_date") in all_cols_list else 0)
+            dd_start = st.selectbox("Start Date", all_cols_list,
+                                    index=dd_start_default, key="dd_start",
+                                    help="e.g. Date of Joining, Date of Birth")
         with dd_c2:
-            end_opts = ["Today (current date)"] + all_cols_list
-            dd_end = st.selectbox("End Date Column", end_opts, key="dd_end")
+            st.caption("**TO date** (the later/end date)")
+            end_opts = ["Today (today's date)"] + all_cols_list
+            dd_end = st.selectbox("End Date", end_opts, key="dd_end",
+                                  help="e.g. Date of Exit, or Today if employee is still active")
         with dd_c3:
-            dd_unit = st.selectbox("Unit", ["Years","Months","Days"], key="dd_unit")
+            st.caption("**Result unit**")
+            dd_unit = st.selectbox("Show result in:", ["Years","Months","Days"], key="dd_unit")
         with dd_c4:
-            dd_out = st.text_input("New Column Name", value="Tenure_Years", key="dd_out")
+            st.caption("**Name for the new column**")
+            dd_out = st.text_input("Column name", value="Tenure_Years", key="dd_out",
+                                   help="This is what the new column will be called in results")
         with dd_c5:
+            st.caption("&nbsp;")
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("➕ Calculate", key="dd_calc", use_container_width=True):
+            if st.button("▶️ Calculate", key="dd_calc", use_container_width=True, type="primary"):
                 d1 = pd.to_datetime(df[dd_start], errors="coerce")
-                if dd_end == "Today (current date)":
-                    d2 = pd.Timestamp.today()
-                else:
-                    d2 = pd.to_datetime(df[dd_end], errors="coerce")
+                d2 = (pd.Timestamp.today() if dd_end == "Today (today's date)"
+                      else pd.to_datetime(df[dd_end], errors="coerce"))
                 diff = (d2 - d1).dt.days.clip(lower=0)
-                if dd_unit == "Years":   result = (diff / 365.25).round(2)
+                if dd_unit == "Years":    result = (diff / 365.25).round(2)
                 elif dd_unit == "Months": result = (diff / 30.44).round(1)
                 else:                     result = diff
                 col_name = dd_out.strip().replace(" ", "_") or "Date_Diff"
                 st.session_state.calc_columns[col_name] = result
-                st.success(f"✅ '{col_name}' calculated!")
+                st.success(f"✅ Done! '{col_name}' added — go to Results tab to see the chart.")
                 st.rerun()
 
-    # ── TAB 2: CUSTOM FORMULA BUILDER ────────────────────────────────────
+    # ── TAB 2: CUSTOM FORMULA BUILDER (non-tech friendly) ────────────────
     with tab_custom:
-        st.markdown("**🔧 Build your own formula using any columns:**")
+        st.markdown("**🔧 Build your own calculation — no coding needed**")
+        st.markdown("""<div class="insight-box">
+        <strong>How to use:</strong><br>
+        1️⃣ &nbsp;Pick the <strong>first column</strong> (e.g. Salary)<br>
+        2️⃣ &nbsp;Choose what to <strong>do with it</strong> (e.g. Multiply)<br>
+        3️⃣ &nbsp;Pick a <strong>second column</strong> or enter a <strong>fixed number</strong> (e.g. 1.10 for 10% hike)<br>
+        4️⃣ &nbsp;Give the result a <strong>name</strong> (e.g. Salary_After_Hike)<br>
+        5️⃣ &nbsp;Click <strong>Calculate</strong> — done!
+        </div>""", unsafe_allow_html=True)
 
-        num_cols = df.select_dtypes(include="number").columns.tolist()
         all_col_list = list(df.columns)
+        num_col_list = df.select_dtypes(include="number").columns.tolist()
 
-        cb_c1, cb_c2, cb_c3, cb_c4, cb_c5, cb_c6 = st.columns([2, 1.5, 2, 0.5, 2, 2])
-
+        # ── Step 1: Pick Column 1 ─────────────────────────────────────────
+        st.markdown("**① Pick your starting column:**")
+        cb_c1, cb_spacer = st.columns([3, 3])
         with cb_c1:
-            col1_sel = st.selectbox("Column 1", all_col_list, key="cb_col1")
-        with cb_c2:
-            op_sel = st.selectbox("Operation", [
-                "+ (Add)", "− (Subtract)", "× (Multiply)", "÷ (Divide)",
-                "Date Diff (Years)", "Date Diff (Months)", "Date Diff (Days)",
-                "% of (col1 × value%)", "Inverse (1 ÷ col1)"
-            ], key="cb_op")
-        with cb_c3:
-            use_col2 = op_sel not in ["Inverse (1 ÷ col1)"]
-            if "Date Diff" in op_sel:
-                col2_opts = ["Today"] + all_col_list
-                col2_sel = st.selectbox("Column 2 / End Date", col2_opts, key="cb_col2")
-                val_sel = None
-            elif use_col2:
-                mode = st.radio("Use:", ["Another Column", "A Fixed Value"],
-                                horizontal=True, key="cb_mode")
-                if mode == "Another Column":
-                    col2_sel = st.selectbox("Column 2", all_col_list, key="cb_col2b")
-                    val_sel = None
-                else:
-                    col2_sel = None
-                    val_sel = st.number_input("Fixed Value", value=1.0, key="cb_val")
+            col1_sel = st.selectbox("Which column do you want to calculate from?",
+                                    all_col_list, key="cb_col1",
+                                    help="This is the column whose values will be used in the calculation")
+
+        # ── Step 2: Choose operation ──────────────────────────────────────
+        st.markdown("**② What do you want to do?**")
+        OP_OPTIONS = {
+            "➕  Add a number to it (e.g. Salary + 5000 bonus)":          "+",
+            "➖  Subtract a number (e.g. Revenue − Cost)":                 "-",
+            "✖️  Multiply it (e.g. Salary × 1.10 for 10% hike)":          "*",
+            "➗  Divide it (e.g. Annual Salary ÷ 12 = Monthly)":           "/",
+            "📅  Date Difference in Years (e.g. Exit − Joining = Tenure)": "date_years",
+            "📅  Date Difference in Months":                               "date_months",
+            "📅  Date Difference in Days":                                 "date_days",
+            "🔢  Percentage of it (e.g. 15% of Salary = Tax)":            "%",
+            "🔁  Ratio of two columns (e.g. Profit ÷ Revenue × 100)":     "ratio100",
+        }
+        op_label = st.selectbox("Choose the operation:", list(OP_OPTIONS.keys()), key="cb_op")
+        op_sel   = OP_OPTIONS[op_label]
+
+        # ── Step 3: Second input ──────────────────────────────────────────
+        st.markdown("**③ What is the second value?**")
+        col2_sel = None; val_sel = None
+
+        if op_sel.startswith("date_"):
+            st.caption("Select the end date column (or use Today if the person is still active):")
+            end_opts = ["Today (today's date)"] + all_col_list
+            col2_sel = st.selectbox("End Date Column:", end_opts, key="cb_col2_date",
+                                    help="e.g. Date of Exit. Use 'Today' if no exit date exists.")
+
+        elif op_sel == "ratio100":
+            st.caption("Ratio = Column 1 ÷ Column 2 × 100 (e.g. Profit ÷ Revenue × 100 = Margin %)")
+            col2_sel = st.selectbox("Divide by which column?", all_col_list, key="cb_col2_ratio",
+                                    help="e.g. Revenue for margin calculation")
+
+        else:
+            input_type = st.radio(
+                "Use:",
+                ["A fixed number  (e.g. multiply by 1.10)",
+                 "Another column from the dataset"],
+                horizontal=True, key="cb_input_type"
+            )
+            if "fixed" in input_type:
+                # Contextual hint based on operation
+                hints = {
+                    "+": "e.g. 5000 = add 5000 to every row",
+                    "-": "e.g. 1000 = subtract 1000 from every row",
+                    "*": "e.g. 1.10 = multiply by 1.10 (10% increase) | 1.15 = 15% | 0.5 = halve it",
+                    "/": "e.g. 12 = divide by 12 (annual→monthly) | 1000 = convert to thousands",
+                    "%": "e.g. 15 = calculate 15% of each value | 10 = 10%",
+                }
+                st.caption(hints.get(op_sel, "Enter the number to use in the calculation"))
+                val_sel = st.number_input("Enter the number:", value=1.10,
+                                          format="%.4f", key="cb_val",
+                                          help="Type the number you want to use")
             else:
-                col2_sel = None; val_sel = None
-                st.caption("No second input needed.")
+                col2_sel = st.selectbox("Which column?", all_col_list, key="cb_col2_col",
+                                        help="Every row: Column1 [operation] Column2")
 
-        with cb_c4:
-            st.markdown("**=**")
-        with cb_c5:
-            out_name = st.text_input("Result Column Name", value="My_Calculation", key="cb_out")
-        with cb_c6:
-            st.markdown("<br>", unsafe_allow_html=True)
-            calc_btn = st.button("➕ Calculate & Add", key="cb_calc", use_container_width=True, type="primary")
+        # ── Step 4: Name the result ───────────────────────────────────────
+        st.markdown("**④ What should the result column be called?**")
+        # Auto-suggest a name
+        op_suffix = {"+" :"_Plus","−":"_Minus","*":"_Multiplied","/":"_Divided",
+                     "date_years":"_Tenure_Years","date_months":"_Tenure_Months",
+                     "date_days":"_Tenure_Days","%":"_Pct","ratio100":"_Ratio_Pct"}
+        suggested = f"{col1_sel}{op_suffix.get(op_sel,'_Calculated')}"
+        out_name = st.text_input(
+            "Column name (no spaces — use underscore):",
+            value=suggested, key="cb_out",
+            help="This is what the new column will be called. Use underscores instead of spaces."
+        )
 
-        # Formula preview
-        op_clean = op_sel.split(" ")[0]
-        if "Date Diff" in op_sel:
-            st.caption(f"Preview: **{out_name}** = ({col2_sel if col2_sel else 'Today'} − {col1_sel}) in {op_sel.split('(')[1].rstrip(')')}")
-        elif col2_sel:
-            st.caption(f"Preview: **{out_name}** = {col1_sel} {op_clean} {col2_sel}")
-        elif val_sel is not None:
-            st.caption(f"Preview: **{out_name}** = {col1_sel} {op_clean} {val_sel}")
+        # ── Formula preview box ───────────────────────────────────────────
+        op_symbols = {"+" :"+"  ,"-":"-","*":"×","/":"÷","%":"× % ","ratio100":"÷ × 100",
+                      "date_years":"Date Diff (Years)","date_months":"Date Diff (Months)",
+                      "date_days":"Date Diff (Days)"}
+        sym = op_symbols.get(op_sel,"?")
+        c2_display = col2_sel if col2_sel else (str(val_sel) if val_sel is not None else "?")
+        st.markdown(f"""<div style="background:#1e293b;border-radius:8px;padding:12px 16px;
+            border-left:3px solid #3b82f6;margin:8px 0">
+            <span style="color:#94a3b8;font-size:.82rem">Formula preview:</span><br>
+            <span style="color:#e2e8f0;font-size:1rem;font-weight:600">
+            {out_name} = {col1_sel} {sym} {c2_display}
+            </span>
+            </div>""", unsafe_allow_html=True)
+
+        # ── Step 5: Calculate ─────────────────────────────────────────────
+        st.markdown("**⑤ Run the calculation:**")
+        calc_btn = st.button("▶️ Calculate Now", key="cb_calc",
+                             use_container_width=False, type="primary")
 
         if calc_btn:
             out_col = out_name.strip().replace(" ", "_") or "Calculated"
             result = None; err_msg = None
 
-            op_map = {
-                "+ (Add)": "+", "− (Subtract)": "-",
-                "× (Multiply)": "*", "÷ (Divide)": "/",
-                "% of (col1 × value%)": "%", "Inverse (1 ÷ col1)": "inv",
-            }
+            c1s = pd.to_numeric(df[col1_sel], errors="coerce") if col1_sel in df.columns else None
 
-            if "Date Diff" in op_sel:
+            if op_sel in ("date_years", "date_months", "date_days"):
                 d1 = pd.to_datetime(df[col1_sel], errors="coerce")
-                if col2_sel == "Today" or col2_sel is None:
-                    d2 = pd.Timestamp.today()
-                else:
-                    d2 = pd.to_datetime(df[col2_sel], errors="coerce")
+                d2 = (pd.Timestamp.today() if (col2_sel is None or col2_sel == "Today (today's date)")
+                      else pd.to_datetime(df[col2_sel], errors="coerce"))
                 diff_d = (d2 - d1).dt.days.clip(lower=0)
-                if "Years"  in op_sel: result = (diff_d / 365.25).round(2)
-                elif "Months" in op_sel: result = (diff_d / 30.44).round(1)
-                else: result = diff_d
+                if op_sel == "date_years":    result = (diff_d / 365.25).round(2)
+                elif op_sel == "date_months": result = (diff_d / 30.44).round(1)
+                else:                         result = diff_d
 
-            elif op_sel == "Inverse (1 ÷ col1)":
-                s = pd.to_numeric(df[col1_sel], errors="coerce").replace(0, np.nan)
-                result = (1 / s).round(4)
+            elif op_sel == "ratio100":
+                if col2_sel and col2_sel in df.columns:
+                    c2s = pd.to_numeric(df[col2_sel], errors="coerce").replace(0, np.nan)
+                    result = (c1s / c2s * 100).round(4)
+                else:
+                    err_msg = "Please select the second column for the ratio."
+
+            elif col2_sel and col2_sel in df.columns:
+                c2s = pd.to_numeric(df[col2_sel], errors="coerce")
+                if op_sel == "+": result = (c1s + c2s).round(4)
+                elif op_sel == "-": result = (c1s - c2s).round(4)
+                elif op_sel == "*": result = (c1s * c2s).round(4)
+                elif op_sel == "/": result = (c1s / c2s.replace(0, np.nan)).round(4)
+                else: err_msg = f"Cannot use that operation with two columns."
+
+            elif val_sel is not None:
+                if op_sel == "+": result = (c1s + val_sel).round(4)
+                elif op_sel == "-": result = (c1s - val_sel).round(4)
+                elif op_sel == "*": result = (c1s * val_sel).round(4)
+                elif op_sel == "/": result = (c1s / (val_sel or np.nan)).round(4)
+                elif op_sel == "%": result = (c1s * val_sel / 100).round(4)
+                else: err_msg = f"Unknown operation."
 
             else:
-                raw_op = op_map.get(op_sel, "+")
-                c1s = pd.to_numeric(df[col1_sel], errors="coerce")
-                if col2_sel:
-                    c2s = pd.to_numeric(df[col2_sel], errors="coerce")
-                    if raw_op == "+": result = (c1s + c2s).round(4)
-                    elif raw_op == "-": result = (c1s - c2s).round(4)
-                    elif raw_op == "*": result = (c1s * c2s).round(4)
-                    elif raw_op == "/": result = (c1s / c2s.replace(0, np.nan)).round(4)
-                elif val_sel is not None:
-                    if raw_op == "+": result = (c1s + val_sel).round(4)
-                    elif raw_op == "-": result = (c1s - val_sel).round(4)
-                    elif raw_op == "*": result = (c1s * val_sel).round(4)
-                    elif raw_op == "/": result = (c1s / (val_sel or np.nan)).round(4)
-                    elif raw_op == "%": result = (c1s * val_sel / 100).round(4)
-                else:
-                    err_msg = "Please select Column 2 or enter a fixed value."
+                err_msg = "Please complete Step 3 — enter a number or pick a column."
 
             if err_msg:
-                st.error(err_msg)
+                st.error(f"Could not calculate: {err_msg}")
             elif result is not None:
                 result.name = out_col
                 st.session_state.calc_columns[out_col] = result
-                st.success(f"✅ '{out_col}' calculated successfully! View in Results tab.")
+                st.success(f"✅ Done! '{out_col}' added. Click the Results tab to see the chart.")
                 st.rerun()
 
     # ── TAB 3: RESULTS & CHARTS ───────────────────────────────────────────
@@ -2988,31 +3083,55 @@ def main():
             "distribution_channel":("Distribution Channel", all_c, "🏪 Retail"),
         }
 
+        # Which sections are relevant per domain
+        DOMAIN_SECTIONS = {
+            "Sales":     ["💼 Sales & Revenue", "📅 Dimensions"],
+            "Marketing": ["📣 Marketing",        "📅 Dimensions", "💼 Sales & Revenue"],
+            "HR":        ["👥 HR",               "📅 Dimensions"],
+            "Ecommerce": ["💼 Sales & Revenue",  "📅 Dimensions", "🏪 Retail"],
+            "Retail":    ["💼 Sales & Revenue",  "📅 Dimensions", "🏪 Retail"],
+            "Fraud":     ["💼 Sales & Revenue",  "📅 Dimensions"],
+            "Generic":   ["💼 Sales & Revenue",  "📅 Dimensions", "👥 HR",
+                          "📣 Marketing",        "🏪 Retail"],
+        }
+        active_sections = DOMAIN_SECTIONS.get(domain,
+            list(dict.fromkeys(s for _,(_,_,s) in KEY_CATALOGUE.items())))
+
         # Group keys by section
         sections = {}
         for key,(lbl,opts,sec) in KEY_CATALOGUE.items():
             sections.setdefault(sec, []).append((key, lbl, opts))
 
-        # Render one section at a time
-        for sec_name, keys in sections.items():
-            st.markdown(f"**{sec_name}**")
-            cols = st.columns(3)
-            for i,(key,lbl,opts) in enumerate(keys):
-                cur = found.get(key, NONE)
-                # Safety: if auto-detected value not in opts list, show NONE
-                safe_cur = cur if cur in opts else NONE
-                idx = opts.index(safe_cur)
-                chosen = cols[i%3].selectbox(
-                    f"{lbl}",
-                    opts,
-                    index=idx,
-                    key=f"ov_{key}",
-                    help=f"Auto-detected: {cur if cur != NONE else 'not detected'}"
-                )
-                if chosen != NONE:
-                    found[key] = chosen
-                elif key in found:
-                    del found[key]
+        # Render active sections expanded, others collapsed/greyed
+        all_sec_names = list(sections.keys())
+        for sec_name in all_sec_names:
+            keys = sections[sec_name]
+            is_active = sec_name in active_sections
+            badge = "" if is_active else " — not used for this domain"
+            with st.expander(f"{sec_name}{badge}", expanded=is_active):
+                if not is_active:
+                    st.caption("These columns are not typically used for the detected domain. "
+                               "You can still manually map them if needed.")
+                cols = st.columns(3)
+                for i,(key,lbl,opts) in enumerate(keys):
+                    cur = found.get(key, NONE)
+                    safe_cur = cur if cur in opts else NONE
+                    idx = opts.index(safe_cur)
+                    # For inactive sections, lock to NONE unless user already mapped it
+                    disabled = (not is_active and safe_cur == NONE)
+                    chosen = cols[i%3].selectbox(
+                        lbl,
+                        opts,
+                        index=idx,
+                        key=f"ov_{key}",
+                        disabled=disabled,
+                        help=(f"Auto-detected: {cur}" if cur != NONE
+                              else "Not detected — select manually if needed")
+                    )
+                    if chosen != NONE:
+                        found[key] = chosen
+                    elif key in found:
+                        del found[key]
 
         # ── Duplicate Warning ─────────────────────────────────────────────
         st.markdown("---")
