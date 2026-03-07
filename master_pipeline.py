@@ -1165,16 +1165,16 @@ def render_fraud(df, found):
     fraud_pct=fraud_ct/total*100
 
     section("🚨 Fraud Detection KPIs", dom)
-    kpis=[("📋 Total Transactions",f"{total:,}",None),
-          ("✅ Legitimate",f"{legit_ct:,}",None),
-          ("🚨 Fraudulent",f"{fraud_ct:,}",None),
-          ("⚠️ Fraud Rate",f"{fraud_pct:.4f}%",None)]
+    kpis=[("Total Transactions",f"{total:,}",None),
+          ("Legitimate Transactions",f"{legit_ct:,}",None),
+          ("Fraudulent Transactions",f"{fraud_ct:,}",None),
+          ("Fraud Rate",f"{fraud_pct:.4f}%",None)]
     if amt_col:
         fa=df2[df2["_lbl"]==1][amt_col].dropna()
         la=df2[df2["_lbl"]==0][amt_col].dropna()
-        if len(fa)>0: kpis+=[("💳 Avg Fraud Amt",f"${fa.mean():,.2f}",None),
-                              ("💚 Avg Legit Amt",f"${la.mean():,.2f}",None),
-                              ("💸 Total Fraud Exposure",f"${fa.sum():,.2f}",None)]
+        if len(fa)>0: kpis+=[("Avg Fraudulent Amount",f"${fa.mean():,.2f}",None),
+                              ("Avg Legitimate Amount",f"${la.mean():,.2f}",None),
+                              ("Total Fraud Exposure",f"${fa.sum():,.2f}",None)]
     show_metrics(kpis)
 
     section("📊 Fraud vs Legitimate", dom)
