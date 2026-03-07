@@ -165,7 +165,15 @@ def load_data(uploaded_file):
                     tmp.write(raw_bytes)
                     tmp_path = tmp.name
                 try:
-                    df = dd.read_csv(tmp_path, encoding=enc).compute()
+                    df = dd.read_csv(tmp_path, encoding=enc,
+                                     assume_missing=True,
+                                     dtype="object").compute()
+                    # Convert numeric columns back after load
+                    for col in df.columns:
+                        try:
+                            df[col] = pd.to_numeric(df[col], errors="ignore")
+                        except Exception:
+                            pass
                 finally:
                     os.unlink(tmp_path)
                 return df
