@@ -1209,13 +1209,14 @@ def render_fraud(df, found):
         section("⏱ Time Analysis", dom)
         c1,c2=st.columns(2)
         with c1:
+            df2[time_col]=pd.to_numeric(df2[time_col],errors="coerce")
             fig=px.histogram(df2,x=time_col,color="_lbl",nbins=48,
                              title="Transactions Over Time",
                              color_discrete_map={0:C["green"],1:C["red"]},
                              barmode="overlay",opacity=0.7,labels={"_lbl":"0=Legit 1=Fraud"})
             fig.update_layout(**cd(380)); st.plotly_chart(fig,use_container_width=True)
         with c2:
-            df2["_hr"]=(df2[time_col]/3600).astype(int)%24
+            df2["_hr"]=(pd.to_numeric(df2[time_col],errors="coerce")/3600).fillna(0).astype(int)%24
             hr=df2.groupby(["_hr","_lbl"]).size().reset_index(name="Count")
             fig=px.bar(hr,x="_hr",y="Count",color="_lbl",title="Transactions by Hour",
                        color_discrete_map={0:C["green"],1:C["red"]},barmode="group",
@@ -1395,7 +1396,7 @@ def render_qa(df, domain, found):
                             f"Fraud avg: **${fa.mean():,.2f}** | Legit avg: **${la.mean():,.2f}** | "
                             f"Total exposure: **${fa.sum():,.2f}**."))
                 if time_c:
-                    df2["_hr"]=(df2[time_c]/3600).astype(int)%24
+                    df2["_hr"]=(pd.to_numeric(df2[time_c],errors="coerce")/3600).fillna(0).astype(int)%24
                     ph=int(df2[df2["_lbl"]==1].groupby("_hr").size().idxmax()) if fc>0 else 0
                     qa.append(("⏱ When does fraud peak?",
                         f"Peak fraud hour: **{ph}:00**. Consider enhanced monitoring during this window."))
