@@ -1172,10 +1172,31 @@ def render_fraud(df, found):
     if amt_col:
         fa=df2[df2["_lbl"]==1][amt_col].dropna()
         la=df2[df2["_lbl"]==0][amt_col].dropna()
-        if len(fa)>0: kpis+=[("Avg Fraudulent Amount",f"${fa.mean():,.2f}",None),
-                              ("Avg Legitimate Amount",f"${la.mean():,.2f}",None),
-                              ("Total Fraud Exposure",f"${fa.sum():,.2f}",None)]
+        if len(fa)>0:
+                kpis+=[("Avg Fraudulent Amount",f"${fa.mean():,.2f}",None),
+                       ("Avg Legitimate Amount", f"${la.mean():,.2f}",None),
+                       ("Total Fraud Exposure",  f"${fa.sum():,.2f}",None)]
     show_metrics(kpis)
+
+    show_metrics(kpis)
+
+    # ── Key Fraud Insight ─────────────────────────────────────────────────
+    if amt_col and len(fa)>0:
+        amt_diff = fa.mean() - la.mean()
+        pct_higher = (fa.mean() - la.mean()) / la.mean() * 100
+        direction = "higher" if amt_diff > 0 else "lower"
+        reason = (
+            "⚠️ Fraudsters target higher-value transactions to maximise gain per stolen card."
+            if amt_diff > 0 else
+            "⚠️ Micro-transaction fraud detected — small amounts used to avoid detection triggers."
+        )
+        insight(
+            f"🔍 <strong>Fraud Pattern Detected:</strong> Average fraudulent transaction "
+            f"(<strong>${fa.mean():,.2f}</strong>) is <strong>{abs(pct_higher):.1f}% {direction}</strong> "
+            f"than average legitimate transaction (<strong>${la.mean():,.2f}</strong>). {reason} "
+            f"Despite only <strong>{fraud_pct:.4f}%</strong> of transactions being fraudulent, "
+            f"total financial exposure is <strong>${fa.sum():,.2f}</strong>."
+        )
 
     section("📊 Fraud vs Legitimate", dom)
     c1,c2=st.columns(2)
@@ -1499,6 +1520,577 @@ def render_qa(df, domain, found):
                     except Exception as e: st.error(f"LLM error: {e}")
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  NATURAL LANGUAGE QUERYING ENGINE
+# ══════════════════════════════════════════════════════════════════════════════
+def compute_nlq_answer(question, df, found, domain):
+    import re as _re
+    q = question.lower().strip()
+    sc   = found.get("sales");    pc   = found.get("profit")
+    prd  = found.get("product");  cat  = found.get("category")
+    dc   = found.get("date");     qty  = found.get("quantity")
+    cus  = found.get("customer"); reg  = found.get("region")
+    sal  = found.get("salary");   attr = found.get("attrition")
+    dept = found.get("department"); gen = found.get("gender")
+    dis  = found.get("discount"); ten  = found.get("tenure")
+    imp  = found.get("impressions"); clk = found.get("clicks")
+    conv = found.get("conversions"); sp  = found.get("spend")
+    store= found.get("store")
+    emp  = found.get("employee_id") or found.get("employee_name")
+
+    def filter_by_time(df2, col, q):
+        if not col:
+            return df2
+        df2 = df2.copy()
+        df2[col] = pd.to_datetime(df2[col], errors="coerce")
+        df2 = df2.dropna(subset=[col])
+        for yr in range(2018, 2030):
+            if str(yr) in q:
+                return df2[df2[col].dt.year == yr]
+        qmap = {
+            "q1": [1,2,3], "q2": [4,5,6], "q3": [7,8,9], "q4": [10,11,12],
+            "first quarter": [1,2,3], "second quarter": [4,5,6],
+            "third quarter": [7,8,9], "fourth quarter": [10,11,12],
+        }
+        for qk, months in qmap.items():
+            if qk in q:
+                return df2[df2[col].dt.month.isin(months)]
+        month_map = {
+            "january":1,"february":2,"march":3,"april":4,"may":5,"june":6,
+            "july":7,"august":8,"september":9,"october":10,"november":11,"december":12,
+            "jan":1,"feb":2,"mar":3,"apr":4,"jun":6,"jul":7,"aug":8,
+            "sep":9,"oct":10,"nov":11,"dec":12,
+        }
+        for mn, mv in month_map.items():
+            if mn in q:
+                return df2[df2[col].dt.month == mv]
+        m = _re.search(r"last (\d+) months?", q)
+        if m:
+            n = int(m.group(1))
+            cutoff = df2[col].max() - pd.DateOffset(months=n)
+            return df2[df2[col] >= cutoff]
+        if "last year" in q:
+            yr = df2[col].dt.year.max() - 1
+            return df2[df2[col].dt.year == yr]
+        if "this year" in q or "current year" in q:
+            yr = df2[col].dt.year.max()
+            return df2[df2[col].dt.year == yr]
+        return df2
+
+    dff = filter_by_time(df, dc, q) if dc else df.copy()
+    note = f" (filtered: {len(dff):,} of {len(df):,} records)" if len(dff) < len(df) else ""
+    answers = []
+
+    # Revenue
+    if sc and any(k in q for k in ["revenue","sales","total","income","how much","made"]):
+        answers.append(f"**Total Revenue{note}:** {dff[sc].sum():,.2f} | Avg: {dff[sc].mean():,.2f}")
+
+    # Profit
+    if pc and any(k in q for k in ["profit","margin","earning","net"]):
+        p = dff[pc].sum()
+        mg = f" | Margin: {p/dff[sc].sum()*100:.1f}%" if sc and dff[sc].sum() > 0 else ""
+        answers.append(f"**Total Profit{note}:** {p:,.2f}{mg}")
+
+    # Top products
+    if prd and sc and any(k in q for k in ["top","best","highest","product","item"]):
+        n = int(_re.search(r"\d+", q).group()) if _re.search(r"\d+", q) else 5
+        n = min(n, 20)
+        tp = dff.groupby(prd)[sc].sum().sort_values(ascending=False).head(n)
+        rows = "\n".join([f"  {ii+1}. **{pp}** — {vv:,.2f}" for ii,(pp,vv) in enumerate(tp.items())])
+        answers.append(f"**Top {n} Products by Revenue{note}:**\n{rows}")
+
+    # Bottom products
+    if prd and sc and any(k in q for k in ["bottom","worst","lowest","underperform"]):
+        n = int(_re.search(r"\d+", q).group()) if _re.search(r"\d+", q) else 5
+        n = min(n, 20)
+        bp = dff.groupby(prd)[sc].sum().sort_values().head(n)
+        rows = "\n".join([f"  {ii+1}. **{pp}** — {vv:,.2f}" for ii,(pp,vv) in enumerate(bp.items())])
+        answers.append(f"**Bottom {n} Products{note}:**\n{rows}")
+
+    # Category
+    if cat and sc and any(k in q for k in ["categor","segment","group","type"]):
+        cs = dff.groupby(cat)[sc].sum().sort_values(ascending=False)
+        rows = "\n".join([f"  {ii+1}. **{cc}** — {vv:,.2f}" for ii,(cc,vv) in enumerate(cs.head(5).items())])
+        answers.append(f"**Revenue by Category{note}:**\n{rows}")
+
+    # Region
+    if reg and sc and any(k in q for k in ["region","area","zone","territory","where"]):
+        rs = dff.groupby(reg)[sc].sum().sort_values(ascending=False)
+        rows = "\n".join([f"  {ii+1}. **{rr}** — {vv:,.2f}" for ii,(rr,vv) in enumerate(rs.head(5).items())])
+        answers.append(f"**Revenue by Region{note}:**\n{rows}")
+
+    # Customers
+    if cus and sc and any(k in q for k in ["customer","client","buyer","who","account"]):
+        n = int(_re.search(r"\d+", q).group()) if _re.search(r"\d+", q) else 5
+        n = min(n, 20)
+        tc = dff.groupby(cus)[sc].sum().sort_values(ascending=False).head(n)
+        rows = "\n".join([f"  {ii+1}. **{cc}** — {vv:,.2f}" for ii,(cc,vv) in enumerate(tc.items())])
+        answers.append(f"**Top {n} Customers{note}:**\n{rows}")
+
+    # Units
+    if qty and any(k in q for k in ["unit","quantity","sold","volume","how many"]):
+        answers.append(f"**Units Sold{note}:** {dff[qty].sum():,.0f} total | Avg per order: {dff[qty].mean():,.1f}")
+
+    # Discount
+    if dis and any(k in q for k in ["discount","promo","offer","rebate"]):
+        answers.append(f"**Discount{note}:** Avg: {dff[dis].mean():,.2f} | Max: {dff[dis].max():,.2f}")
+        if sc:
+            corr = dff[[dis, sc]].dropna().corr().iloc[0, 1]
+            lbl = "positive (helps sales)" if corr > 0.1 else "negative (hurts revenue)" if corr < -0.1 else "neutral"
+            answers.append(f"  Discount–Revenue correlation: **{corr:.3f}** ({lbl})")
+
+    # Salary
+    if sal and any(k in q for k in ["salary","pay","wage","compensation","earn","ctc"]):
+        s = dff[sal].dropna()
+        answers.append(f"**Salary:** Avg: {s.mean():,.0f} | Median: {s.median():,.0f} | Min: {s.min():,.0f} | Max: {s.max():,.0f} | Payroll: {s.sum():,.0f}")
+        if dept:
+            ds = dff.groupby(dept)[sal].mean().sort_values(ascending=False)
+            answers.append(f"  Highest dept: **{ds.index[0]}** ({ds.iloc[0]:,.0f}) | Lowest: **{ds.index[-1]}** ({ds.iloc[-1]:,.0f})")
+
+    # Gender pay gap
+    if sal and gen and any(k in q for k in ["gender","male","female","pay gap","women","men"]):
+        dg = dff.copy()
+        dg["_g"] = dg[gen].astype(str).str.title()
+        ms = dg[dg["_g"].isin(["Male","M"])][sal].mean()
+        fs = dg[dg["_g"].isin(["Female","F"])][sal].mean()
+        if ms > 0 and fs > 0:
+            gap = abs(ms - fs) / max(ms, fs) * 100
+            answers.append(f"**Gender Pay Gap:** Male: {ms:,.0f} | Female: {fs:,.0f} | Gap: **{gap:.1f}%** ({'Male earns more' if ms > fs else 'Female earns more'})")
+
+    # Attrition
+    if attr and any(k in q for k in ["attrition","resign","left","churn","turnover","quit","exit"]):
+        rate = dff[attr].astype(str).str.lower().isin(["yes","true","1","resigned","terminated","left"]).mean() * 100
+        health = "Above 15% — high risk." if rate > 15 else "Within healthy range."
+        answers.append(f"**Attrition Rate:** {rate:.1f}% — {health}")
+        if dept:
+            da = dff.copy()
+            da["_left"] = da[attr].astype(str).str.lower().isin(["yes","true","1","resigned","terminated","left"])
+            dr = da.groupby(dept)["_left"].mean().mul(100).sort_values(ascending=False)
+            answers.append(f"  Highest: **{dr.index[0]}** ({dr.iloc[0]:.1f}%) | Lowest: **{dr.index[-1]}** ({dr.iloc[-1]:.1f}%)")
+
+    # Employees / headcount
+    if any(k in q for k in ["employee","headcount","staff","workforce","how many employee"]):
+        total_emp = dff[emp].nunique() if emp else len(dff)
+        answers.append(f"**Total Employees:** {total_emp:,}")
+        if dept:
+            dc2 = dff[dept].value_counts().head(5)
+            rows = " | ".join([f"**{dd}**: {cc:,}" for dd, cc in dc2.items()])
+            answers.append(f"  By Department: {rows}")
+        if gen:
+            gc = dff[gen].astype(str).str.title().value_counts()
+            m = gc.get("Male", gc.get("M", 0))
+            f2 = gc.get("Female", gc.get("F", 0))
+            answers.append(f"  Gender: **{int(m):,} Male** / **{int(f2):,} Female**")
+
+    # Department
+    if dept and any(k in q for k in ["department","dept","division","team"]):
+        dc3 = dff[dept].value_counts()
+        rows = "\n".join([f"  {ii+1}. **{dd}** — {cc:,}" for ii,(dd,cc) in enumerate(dc3.head(10).items())])
+        answers.append(f"**Department Breakdown:**\n{rows}")
+
+    # Tenure
+    if ten and any(k in q for k in ["tenure","experience","service","years"]):
+        answers.append(f"**Tenure:** Avg: {dff[ten].mean():.1f} yrs | Median: {dff[ten].median():.1f} yrs | Tenured (>5yr): {(dff[ten]>5).sum():,}")
+
+    # CTR
+    if imp and clk and any(k in q for k in ["ctr","click through","click rate"]):
+        ctr = dff[clk].sum() / dff[imp].sum() * 100
+        answers.append(f"**CTR:** {ctr:.2f}% ({dff[clk].sum():,.0f} clicks / {dff[imp].sum():,.0f} impressions)")
+
+    # CVR
+    if clk and conv and any(k in q for k in ["cvr","conversion","convert","lead"]):
+        cvr = dff[conv].sum() / dff[clk].sum() * 100
+        answers.append(f"**CVR:** {cvr:.2f}% ({dff[conv].sum():,.0f} conversions from {dff[clk].sum():,.0f} clicks)")
+
+    # ROI
+    if sp and sc and any(k in q for k in ["roi","return on","roas","marketing return"]):
+        roi_v = (dff[sc].sum() - dff[sp].sum()) / dff[sp].sum() * 100
+        answers.append(f"**Marketing ROI:** {roi_v:.1f}% | Spend: {dff[sp].sum():,.2f} | Revenue: {dff[sc].sum():,.2f}")
+
+    # Store
+    if store and sc and any(k in q for k in ["store","branch","outlet","location","shop"]):
+        ts = dff.groupby(store)[sc].sum().sort_values(ascending=False)
+        answers.append(f"**Top Store:** {ts.index[0]} ({ts.iloc[0]:,.2f}) | Bottom: {ts.index[-1]} ({ts.iloc[-1]:,.2f}) | Total: {ts.shape[0]}")
+
+    # Fraud
+    if domain == "Fraud" and any(k in q for k in ["fraud","fraudulent","legitimate","rate","suspicious"]):
+        cl = {c.lower().strip(): c for c in df.columns}
+        fraud_label_cols = ["class","label","fraud","is_fraud","isfraud","target"]
+        cc = next((cl[c] for c in fraud_label_cols if c in cl), None)
+        if cc:
+            df2 = dff.copy()
+            df2["_lbl"] = df2[cc].astype(str).str.lower().map(lambda x: 1 if x in ["1","true","yes","fraud"] else 0)
+            fc = int(df2["_lbl"].sum())
+            total = len(df2)
+            answers.append(f"**Fraud:** {fc:,} fraud ({fc/total*100:.4f}%) out of {total:,} transactions")
+            amt = cl.get("amount")
+            if amt:
+                fa = df2[df2["_lbl"]==1][amt]
+                la = df2[df2["_lbl"]==0][amt]
+                if len(fa) > 0:
+                    answers.append(f"  Avg fraud amount: ${fa.mean():,.2f} | Avg legit: ${la.mean():,.2f} | Exposure: ${fa.sum():,.2f}")
+
+    # Dataset size
+    if any(k in q for k in ["record","row","size","dataset","how big","many record"]):
+        answers.append(f"**Dataset:** {len(df):,} records | {len(df.columns)} columns | Domain: **{domain}**")
+
+    # Compare years
+    if sc and dc and any(k in q for k in ["compare","vs","versus","difference","between"]):
+        d2 = prep_date(df, dc, sc)
+        if not d2.empty:
+            years = sorted(d2["_Y"].unique())
+            if len(years) >= 2:
+                y1, y2 = years[-2], years[-1]
+                v1 = d2[d2["_Y"]==y1][sc].sum()
+                v2 = d2[d2["_Y"]==y2][sc].sum()
+                chg = (v2 - v1) / v1 * 100 if v1 > 0 else 0
+                arrow = "🔺" if chg > 0 else "🔻"
+                answers.append(f"**Year Comparison:** {y1}: {v1:,.2f} → {y2}: {v2:,.2f} ({arrow}{abs(chg):.1f}% change)")
+
+    # Trend
+    if sc and dc and any(k in q for k in ["trend","over time","monthly","growth","increase","decrease"]):
+        d2 = prep_date(dff, dc, sc)
+        if not d2.empty:
+            m = d2.groupby("_M")[sc].sum()
+            if len(m) >= 2:
+                first_v = m.iloc[0]; last_v = m.iloc[-1]
+                chg = (last_v - first_v) / first_v * 100 if first_v > 0 else 0
+                arrow = "🔺" if chg > 0 else "🔻"
+                answers.append(
+                    f"**Revenue Trend{note}:** {m.index[0]} ({first_v:,.2f}) → {m.index[-1]} ({last_v:,.2f}) | "
+                    f"Overall: {arrow}{abs(chg):.1f}% | Best: **{m.idxmax()}** ({m.max():,.2f}) | Worst: **{m.idxmin()}** ({m.min():,.2f})"
+                )
+
+    # Average
+    if any(k in q for k in ["average","mean","avg","typical"]):
+        if sc:  answers.append(f"**Avg Revenue per Record:** {dff[sc].mean():,.2f}")
+        if pc:  answers.append(f"**Avg Profit per Record:** {dff[pc].mean():,.2f}")
+        if qty: answers.append(f"**Avg Units per Order:** {dff[qty].mean():,.1f}")
+        if sal: answers.append(f"**Avg Salary:** {dff[sal].mean():,.0f}")
+
+    # Fallback
+    if not answers:
+        nc = dff.select_dtypes(include="number").columns.tolist()
+        if nc:
+            s = dff[nc[0]].dropna()
+            answers.append(f"**{nc[0]}:** Total: {s.sum():,.2f} | Avg: {s.mean():,.2f} | Min: {s.min():,.2f} | Max: {s.max():,.2f}")
+        answers.append("Try asking: revenue, profit, top products, customers, trend, discount, attrition, salary, fraud rate...")
+
+    return "\n\n".join(answers)
+
+
+def render_nlq(df, domain, found):
+    section("💬 Ask Your Data — Natural Language Query", domain.lower())
+    st.markdown("""<div class="insight-box">
+    <strong>💬 Ask anything about your data in plain English.</strong><br>
+    Examples: <em>"What is total revenue in Q3?"</em> &nbsp;·&nbsp;
+    <em>"Show top 10 products"</em> &nbsp;·&nbsp;
+    <em>"What is attrition rate by department?"</em> &nbsp;·&nbsp;
+    <em>"Compare 2022 vs 2023 sales"</em>
+    </div>""", unsafe_allow_html=True)
+
+    quick_map = {
+        "Sales":     ["Total revenue?","Top 5 products?","Best month?","Top 5 customers?","Revenue trend?","Profit margin?"],
+        "HR":        ["Total employees?","Avg salary?","Attrition rate?","Salary by department?","Gender pay gap?","Avg tenure?"],
+        "Marketing": ["Total spend?","Marketing ROI?","CTR?","Conversion rate?","Revenue trend?"],
+        "Ecommerce": ["Total revenue?","Top 10 products?","Top customers?","Best category?","Revenue trend?"],
+        "Retail":    ["Total revenue?","Top 10 stores?","Best category?","Avg discount?","Top products?"],
+        "Fraud":     ["Fraud rate?","Avg fraud amount?","Total fraud exposure?","Fraudulent transactions?"],
+        "Generic":   ["Total records?","Average values?","Summary?"],
+    }
+    qs = quick_map.get(domain, quick_map["Generic"])
+    st.markdown("**Quick Questions:**")
+    btn_cols = st.columns(len(qs))
+    clicked_q = None
+    for i, q in enumerate(qs):
+        with btn_cols[i]:
+            if st.button(q, key=f"nlq_btn_{i}", use_container_width=True):
+                clicked_q = q
+
+    user_q = st.text_input(
+        "Or type your own question:",
+        value=clicked_q or "",
+        placeholder="e.g. What are the top 5 products by revenue in 2023?",
+        key="nlq_input"
+    )
+
+    if user_q:
+        with st.spinner("Analysing your data..."):
+            answer = compute_nlq_answer(user_q, df, found, domain)
+        st.markdown("---")
+        st.markdown(f"**Question:** {user_q}")
+        st.markdown("**Answer:**")
+        st.markdown(answer)
+
+        if LLM_PROVIDER != "huggingface":
+            if st.button("🤖 Enhance with AI", key="nlq_llm"):
+                with st.spinner("Querying AI..."):
+                    nc = df.select_dtypes(include="number").columns.tolist()
+                    stats = df[nc[:8]].describe().round(2).to_string() if nc else ""
+                    prompt = (f"You are a {domain} data analyst. Dataset: {len(df):,} records.\n"
+                              f"Columns: {', '.join(df.columns[:20])}\nStats:\n{stats}\n\n"
+                              f"Answer with specific numbers:\n{user_q}")
+                    try:
+                        st.markdown("**AI Enhanced Answer:**")
+                        st.markdown(query_llm(prompt))
+                    except Exception as e:
+                        st.error(f"LLM error: {e}")
+
+    if "nlq_history" not in st.session_state:
+        st.session_state.nlq_history = []
+    if user_q and (not st.session_state.nlq_history or user_q != st.session_state.nlq_history[0][0]):
+        ans = compute_nlq_answer(user_q, df, found, domain)
+        st.session_state.nlq_history.insert(0, (user_q, ans))
+        st.session_state.nlq_history = st.session_state.nlq_history[:10]
+    if len(st.session_state.nlq_history) > 1:
+        with st.expander("Query History (last 10)", expanded=False):
+            for i, (hq, ha) in enumerate(st.session_state.nlq_history[1:], 1):
+                st.markdown(f"**Q{i}:** {hq}")
+                st.markdown(f"**A:** {ha[:300]}..." if len(ha) > 300 else f"**A:** {ha}")
+                st.markdown("---")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PDF REPORT EXPORT
+# ══════════════════════════════════════════════════════════════════════════════
+def generate_pdf_report(df, found, domain):
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import cm
+        from reportlab.lib import colors
+        from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
+                                        Table, TableStyle, HRFlowable, PageBreak)
+        from reportlab.lib.enums import TA_CENTER
+        import datetime
+
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=A4,
+                                rightMargin=2*cm, leftMargin=2*cm,
+                                topMargin=2*cm, bottomMargin=2*cm)
+        styles = getSampleStyleSheet()
+
+        DOMAIN_HEX = {
+            "Sales": "#0ea5e9", "Marketing": "#ef4444", "HR": "#8b5cf6",
+            "Ecommerce": "#10b981", "Retail": "#f59e0b",
+            "Fraud": "#ef4444", "Generic": "#64748b",
+        }
+        dc = colors.HexColor(DOMAIN_HEX.get(domain, "#0ea5e9"))
+
+        title_s  = ParagraphStyle("T",  parent=styles["Title"],   fontSize=22, spaceAfter=6,  alignment=TA_CENTER, fontName="Helvetica-Bold", textColor=colors.HexColor("#1a1a2e"))
+        sub_s    = ParagraphStyle("S",  parent=styles["Normal"],  fontSize=10, spaceAfter=4,  alignment=TA_CENTER, textColor=colors.HexColor("#4a5568"))
+        h1_s     = ParagraphStyle("H1", parent=styles["Heading1"],fontSize=14, spaceBefore=14,spaceAfter=6,  fontName="Helvetica-Bold", textColor=colors.HexColor("#1a1a2e"))
+        body_s   = ParagraphStyle("B",  parent=styles["Normal"],  fontSize=9,  spaceAfter=4,  leading=13, textColor=colors.HexColor("#2d3748"))
+
+        def make_table(data, col_widths, header_color=dc):
+            t = Table(data, colWidths=col_widths)
+            t.setStyle(TableStyle([
+                ("BACKGROUND",    (0,0), (-1,0),  header_color),
+                ("TEXTCOLOR",     (0,0), (-1,0),  colors.white),
+                ("FONTNAME",      (0,0), (-1,0),  "Helvetica-Bold"),
+                ("FONTSIZE",      (0,0), (-1,0),  9),
+                ("FONTSIZE",      (0,1), (-1,-1), 8.5),
+                ("ROWBACKGROUNDS",(0,1), (-1,-1),  [colors.HexColor("#f7fafc"), colors.white]),
+                ("GRID",          (0,0), (-1,-1),  0.4, colors.HexColor("#e2e8f0")),
+                ("ALIGN",         (0,0), (-1,-1),  "LEFT"),
+                ("TOPPADDING",    (0,0), (-1,-1),  4),
+                ("BOTTOMPADDING", (0,0), (-1,-1),  4),
+                ("LEFTPADDING",   (0,0), (-1,-1),  6),
+            ]))
+            return t
+
+        now   = datetime.datetime.now().strftime("%d %B %Y, %H:%M")
+        story = [Spacer(1, 0.8*cm)]
+
+        # Cover
+        story += [
+            Paragraph("BOARDROOM REPORT", sub_s),
+            Paragraph("Universal Agentic AI Data Analyst", title_s),
+            HRFlowable(width="100%", thickness=2, color=dc, spaceAfter=8),
+            Paragraph(f"Domain: <b>{domain}</b>  |  Generated: {now}", sub_s),
+            Paragraph(f"Dataset: {len(df):,} records × {len(df.columns)} columns", sub_s),
+            Spacer(1, 0.5*cm),
+        ]
+
+        sc   = found.get("sales");    pc   = found.get("profit")
+        prd  = found.get("product");  cat  = found.get("category")
+        dcol = found.get("date");     qty  = found.get("quantity")
+        cus  = found.get("customer"); reg  = found.get("region")
+        sal  = found.get("salary");   attr = found.get("attrition")
+        dept = found.get("department"); gen = found.get("gender")
+        ten  = found.get("tenure")
+        emp  = found.get("employee_id") or found.get("employee_name")
+
+        # Executive Summary
+        story.append(Paragraph("Executive Summary", h1_s))
+        story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e2e8f0"), spaceAfter=4))
+        sum_lines = []
+        if sc:
+            sum_lines += [f"Total Revenue: {df[sc].sum():,.2f}",
+                          f"Average Order Value: {df[sc].mean():,.2f}",
+                          f"Peak Transaction: {df[sc].max():,.2f}"]
+        if pc and sc:
+            sum_lines += [f"Total Profit: {df[pc].sum():,.2f}",
+                          f"Profit Margin: {df[pc].sum()/df[sc].sum()*100:.1f}%"]
+        if prd and sc:
+            bp = df.groupby(prd)[sc].sum().idxmax()
+            sum_lines.append(f"Best Product: {bp}")
+        if cus:     sum_lines.append(f"Unique Customers: {df[cus].nunique():,}")
+        if qty:     sum_lines.append(f"Units Sold: {df[qty].sum():,.0f}")
+        if dcol:
+            dd2 = pd.to_datetime(df[dcol], errors="coerce").dropna()
+            if len(dd2):
+                sum_lines.append(f"Date Range: {dd2.min().date()} to {dd2.max().date()}")
+        if sal:
+            sum_lines += [f"Total Payroll: {df[sal].sum():,.0f}",
+                          f"Average Salary: {df[sal].mean():,.0f}",
+                          f"Salary Range: {df[sal].min():,.0f} – {df[sal].max():,.0f}"]
+        if domain == "HR":
+            total_emp = df[emp].nunique() if emp else len(df)
+            sum_lines.append(f"Total Employees: {total_emp:,}")
+        if attr:
+            rate = df[attr].astype(str).str.lower().isin(["yes","true","1","resigned","terminated","left"]).mean()*100
+            sum_lines.append(f"Attrition Rate: {rate:.1f}%")
+        if ten:     sum_lines.append(f"Average Tenure: {df[ten].mean():.1f} years")
+        if gen:
+            gc = df[gen].astype(str).str.title().value_counts()
+            m  = gc.get("Male", gc.get("M", 0))
+            f2 = gc.get("Female", gc.get("F", 0))
+            sum_lines.append(f"Gender Split: {int(m):,} Male / {int(f2):,} Female")
+        sum_lines.append(f"Total Records Analysed: {len(df):,}")
+        for line in sum_lines:
+            story.append(Paragraph(f"• {line}", body_s))
+        story.append(Spacer(1, 0.3*cm))
+
+        # KPI Table
+        story.append(Paragraph("Key Performance Indicators", h1_s))
+        story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e2e8f0"), spaceAfter=4))
+        kpi_rows = [["Metric", "Value"]]
+        if sc:
+            kpi_rows += [["Total Revenue", f"{df[sc].sum():,.2f}"],
+                         ["Average Order Value", f"{df[sc].mean():,.2f}"],
+                         ["Peak Value", f"{df[sc].max():,.2f}"]]
+        if pc:
+            kpi_rows.append(["Total Profit", f"{df[pc].sum():,.2f}"])
+            if sc: kpi_rows.append(["Profit Margin", f"{df[pc].sum()/df[sc].sum()*100:.1f}%"])
+        if qty:  kpi_rows.append(["Total Units Sold", f"{df[qty].sum():,.0f}"])
+        if cus:  kpi_rows.append(["Unique Customers", f"{df[cus].nunique():,}"])
+        if prd:  kpi_rows.append(["Products", f"{df[prd].nunique():,}"])
+        if sal:
+            kpi_rows += [["Average Salary", f"{df[sal].mean():,.0f}"],
+                         ["Total Payroll", f"{df[sal].sum():,.0f}"]]
+        if attr:
+            rate = df[attr].astype(str).str.lower().isin(["yes","true","1","resigned","terminated","left"]).mean()*100
+            kpi_rows.append(["Attrition Rate", f"{rate:.1f}%"])
+        if ten:  kpi_rows.append(["Average Tenure", f"{df[ten].mean():.1f} yrs"])
+        kpi_rows.append(["Total Records", f"{len(df):,}"])
+        story.append(make_table(kpi_rows, [10*cm, 6*cm]))
+        story.append(Spacer(1, 0.4*cm))
+
+        # Top Products
+        if prd and sc:
+            story.append(PageBreak())
+            story.append(Paragraph("Top 10 Products by Revenue", h1_s))
+            story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e2e8f0"), spaceAfter=4))
+            tp = df.groupby(prd)[sc].sum().sort_values(ascending=False).head(10).reset_index()
+            tp.columns = ["Product", "Revenue"]
+            rows = [["Rank", "Product", "Revenue"]]
+            for idx_r, row in tp.iterrows():
+                rows.append([str(idx_r+1), str(row["Product"]), f"{row['Revenue']:,.2f}"])
+            story.append(make_table(rows, [2*cm, 10*cm, 5*cm]))
+            story.append(Spacer(1, 0.4*cm))
+
+        # Top Customers
+        if cus and sc:
+            story.append(Paragraph("Top 10 Customers by Revenue", h1_s))
+            story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e2e8f0"), spaceAfter=4))
+            tc = df.groupby(cus)[sc].sum().sort_values(ascending=False).head(10).reset_index()
+            tc.columns = ["Customer", "Revenue"]
+            rows = [["Rank", "Customer", "Revenue"]]
+            for idx_r, row in tc.iterrows():
+                rows.append([str(idx_r+1), str(row["Customer"]), f"{row['Revenue']:,.2f}"])
+            story.append(make_table(rows, [2*cm, 10*cm, 5*cm]))
+            story.append(Spacer(1, 0.4*cm))
+
+        # Salary by Department (HR)
+        if sal and dept:
+            story.append(PageBreak())
+            story.append(Paragraph("Salary Analysis by Department", h1_s))
+            story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e2e8f0"), spaceAfter=4))
+            ds = df.groupby(dept)[sal].agg(["mean","min","max","sum"]).reset_index()
+            ds.columns = ["Department","Avg Salary","Min","Max","Total Payroll"]
+            rows = [["Department","Avg Salary","Min","Max","Total Payroll"]]
+            for _, row in ds.iterrows():
+                rows.append([str(row["Department"]), f"{row['Avg Salary']:,.0f}",
+                             f"{row['Min']:,.0f}", f"{row['Max']:,.0f}", f"{row['Total Payroll']:,.0f}"])
+            story.append(make_table(rows, [5*cm, 3.5*cm, 2.5*cm, 2.5*cm, 3.5*cm]))
+            story.append(Spacer(1, 0.4*cm))
+
+        # Column Profile
+        story.append(PageBreak())
+        story.append(Paragraph("Data Intelligence — Column Profile", h1_s))
+        story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e2e8f0"), spaceAfter=4))
+        story.append(Paragraph("Auto-detected column roles, types, completeness and statistics:", body_s))
+        col_rows = [["Column", "Type", "Non-Null%", "Unique", "Sample / Stats"]]
+        for col in df.columns[:25]:
+            dtype   = str(df[col].dtype)
+            nn_pct  = f"{df[col].notna().mean()*100:.0f}%"
+            uniq    = f"{df[col].nunique():,}"
+            if pd.api.types.is_numeric_dtype(df[col]):
+                s2 = df[col].dropna()
+                sample = f"Min:{s2.min():,.1f} Avg:{s2.mean():,.1f} Max:{s2.max():,.1f}"
+            else:
+                top_vals = df[col].dropna().astype(str).value_counts().head(2).index.tolist()
+                sample   = ", ".join(top_vals)[:40]
+            col_rows.append([col[:20], dtype[:10], nn_pct, uniq, sample[:40]])
+        story.append(make_table(col_rows, [4*cm, 2.5*cm, 2*cm, 2*cm, 6.5*cm],
+                                header_color=colors.HexColor("#2d3748")))
+
+        # Footer
+        story += [
+            Spacer(1, 0.5*cm),
+            HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e2e8f0"), spaceAfter=4),
+            Paragraph(f"Generated by Universal Agentic AI Data Analyst  ·  {now}  ·  Domain: {domain}", sub_s),
+        ]
+
+        doc.build(story)
+        buf.seek(0)
+        return buf.read()
+
+    except ImportError:
+        return None
+    except Exception as e:
+        st.error(f"PDF error: {e}")
+        return None
+
+
+def render_pdf_export(df, found, domain):
+    section("📄 Export Boardroom PDF Report", domain.lower())
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        st.markdown("""<div class="insight-box">
+        <strong>📄 Download a complete boardroom-ready PDF</strong> containing:<br>
+        Executive Summary · KPI Table · Top 10 Products · Top 10 Customers ·
+        Salary by Department · Data Intelligence Column Profile
+        </div>""", unsafe_allow_html=True)
+    with c2:
+        if st.button("🖨️ Generate PDF Report", use_container_width=True,
+                     type="primary", key="gen_pdf"):
+            with st.spinner("Building PDF..."):
+                pdf_bytes = generate_pdf_report(df, found, domain)
+            if pdf_bytes:
+                import datetime
+                fname = f"{domain}_Report_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+                st.download_button("⬇️ Download PDF", data=pdf_bytes,
+                                   file_name=fname, mime="application/pdf",
+                                   use_container_width=True, key="dl_pdf")
+                st.success("PDF ready! Click above to download.")
+            else:
+                st.warning("Add `reportlab>=4.0.0` to requirements.txt and redeploy.")
+                st.code("reportlab>=4.0.0")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  MAIN
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1605,6 +2197,8 @@ def main():
 
     render_summary(df, found, domain)
     render_qa(df, domain, found)
+    render_nlq(df, domain, found)
+    render_pdf_export(df, found, domain)
 
 
 if __name__=="__main__":
