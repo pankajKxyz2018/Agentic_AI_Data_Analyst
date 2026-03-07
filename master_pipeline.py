@@ -1160,6 +1160,7 @@ def render_fraud(df, found):
 
     df2=df.copy()
     df2["_lbl"]=df2[class_col].astype(str).str.lower().map(lambda x:1 if x in ["1","true","yes","fraud"] else 0)
+    df2["_status"]=df2["_lbl"].map({0:"✅ Legitimate",1:"🚨 Fraud"})
     total=len(df2); fraud_ct=int(df2["_lbl"].sum()); legit_ct=total-fraud_ct
     fraud_pct=fraud_ct/total*100
 
@@ -1193,16 +1194,16 @@ def render_fraud(df, found):
         section("💳 Transaction Amount Analysis", dom)
         c1,c2=st.columns(2)
         with c1:
-            fig=px.box(df2,x="_lbl",y=amt_col,color="_lbl",
-                       title="Amount: Legitimate(0) vs Fraud(1)",
-                       color_discrete_map={0:C["green"],1:C["red"]},
-                       labels={"_lbl":"Class"})
+            fig=px.box(df2,x="_status",y=amt_col,color="_status",
+                       title="Transaction Amount: Legitimate vs Fraud",
+                       color_discrete_map={"✅ Legitimate":C["green"],"🚨 Fraud":C["red"]},
+                       labels={"_status":"Transaction Type"})
             fig.update_layout(**cd(400)); st.plotly_chart(fig,use_container_width=True)
         with c2:
-            fig=px.histogram(df2,x=amt_col,color="_lbl",nbins=50,
-                             title="Amount Distribution by Class",
-                             color_discrete_map={0:C["green"],1:C["red"]},
-                             barmode="overlay",opacity=0.7,labels={"_lbl":"0=Legit 1=Fraud"})
+            fig=px.histogram(df2,x=amt_col,color="_status",nbins=50,
+                             title="Amount Distribution: Legitimate vs Fraud",
+                             color_discrete_map={"✅ Legitimate":C["green"],"🚨 Fraud":C["red"]},
+                             barmode="overlay",opacity=0.7,labels={"_status":"Transaction Type"})
             fig.update_layout(**cd(400)); st.plotly_chart(fig,use_container_width=True)
 
     if time_col:
@@ -1210,17 +1211,17 @@ def render_fraud(df, found):
         c1,c2=st.columns(2)
         with c1:
             df2[time_col]=pd.to_numeric(df2[time_col],errors="coerce")
-            fig=px.histogram(df2,x=time_col,color="_lbl",nbins=48,
+            fig=px.histogram(df2,x=time_col,color="_status",nbins=48,
                              title="Transactions Over Time",
-                             color_discrete_map={0:C["green"],1:C["red"]},
-                             barmode="overlay",opacity=0.7,labels={"_lbl":"0=Legit 1=Fraud"})
+                             color_discrete_map={"✅ Legitimate":C["green"],"🚨 Fraud":C["red"]},
+                             barmode="overlay",opacity=0.7,labels={"_status":"Transaction Type"})
             fig.update_layout(**cd(380)); st.plotly_chart(fig,use_container_width=True)
         with c2:
             df2["_hr"]=(pd.to_numeric(df2[time_col],errors="coerce")/3600).fillna(0).astype(int)%24
-            hr=df2.groupby(["_hr","_lbl"]).size().reset_index(name="Count")
-            fig=px.bar(hr,x="_hr",y="Count",color="_lbl",title="Transactions by Hour",
-                       color_discrete_map={0:C["green"],1:C["red"]},barmode="group",
-                       labels={"_hr":"Hour","_lbl":"0=Legit 1=Fraud"})
+            hr=df2.groupby(["_hr","_status"]).size().reset_index(name="Count")
+            fig=px.bar(hr,x="_hr",y="Count",color="_status",title="Transactions by Hour of Day",
+                       color_discrete_map={"✅ Legitimate":C["green"],"🚨 Fraud":C["red"]},barmode="group",
+                       labels={"_hr":"Hour (0-23)","_status":"Transaction Type"})
             fig.update_layout(**cd(380)); st.plotly_chart(fig,use_container_width=True)
 
     if v_cols:
@@ -1228,10 +1229,10 @@ def render_fraud(df, found):
         cols_g=st.columns(2)
         for i,vc in enumerate(v_cols[:6]):
             with cols_g[i%2]:
-                fig=px.box(df2,x="_lbl",y=vc,color="_lbl",
-                           title=f"{vc} — Fraud vs Legitimate",
-                           color_discrete_map={0:C["green"],1:C["red"]},
-                           labels={"_lbl":"0=Legit 1=Fraud"})
+                fig=px.box(df2,x="_status",y=vc,color="_status",
+                           title=f"{vc} — Legitimate vs Fraud",
+                           color_discrete_map={"✅ Legitimate":C["green"],"🚨 Fraud":C["red"]},
+                           labels={"_status":"Transaction Type"})
                 fig.update_layout(**cd(320)); st.plotly_chart(fig,use_container_width=True)
 
     section("🔗 Feature Correlation with Fraud", dom)
