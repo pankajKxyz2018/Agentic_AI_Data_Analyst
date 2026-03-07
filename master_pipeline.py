@@ -2122,6 +2122,740 @@ def render_pdf_export(df, found, domain):
                 st.code("reportlab>=4.0.0")
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CALCULATED COLUMNS ENGINE  —  DAX-style for all domains
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Domain-specific preset calculations shown as quick-add buttons
+DOMAIN_PRESETS = {
+    "HR": [
+        {
+            "name": "Tenure (Years)",
+            "output_col": "Tenure_Years",
+            "description": "Years between joining date and exit/today",
+            "type": "date_diff",
+            "params": {"start_key": "hire_date", "end_key": "exit_date", "unit": "years"},
+            "icon": "📅",
+        },
+        {
+            "name": "Tenure (Months)",
+            "output_col": "Tenure_Months",
+            "description": "Months of service",
+            "type": "date_diff",
+            "params": {"start_key": "hire_date", "end_key": "exit_date", "unit": "months"},
+            "icon": "📅",
+        },
+        {
+            "name": "Salary After 5% Hike",
+            "output_col": "Salary_5pct_Hike",
+            "description": "Salary × 1.05",
+            "type": "formula",
+            "params": {"col_key": "salary", "op": "multiply", "value": 1.05},
+            "icon": "💰",
+        },
+        {
+            "name": "Salary After 10% Hike",
+            "output_col": "Salary_10pct_Hike",
+            "description": "Salary × 1.10",
+            "type": "formula",
+            "params": {"col_key": "salary", "op": "multiply", "value": 1.10},
+            "icon": "💰",
+        },
+        {
+            "name": "Salary After 15% Hike",
+            "output_col": "Salary_15pct_Hike",
+            "description": "Salary × 1.15",
+            "type": "formula",
+            "params": {"col_key": "salary", "op": "multiply", "value": 1.15},
+            "icon": "💰",
+        },
+        {
+            "name": "Monthly Salary",
+            "output_col": "Monthly_Salary",
+            "description": "Annual Salary ÷ 12",
+            "type": "formula",
+            "params": {"col_key": "salary", "op": "divide", "value": 12},
+            "icon": "💰",
+        },
+        {
+            "name": "Age Band",
+            "output_col": "Age_Band",
+            "description": "Group age into bands: 20-30, 31-40, 41-50, 51+",
+            "type": "bin",
+            "params": {"col_key": "age", "bins": [0, 30, 40, 50, 100],
+                       "labels": ["20-30", "31-40", "41-50", "51+"]},
+            "icon": "🎂",
+        },
+        {
+            "name": "Salary Band",
+            "output_col": "Salary_Band",
+            "description": "Low / Mid / High / Senior based on salary percentiles",
+            "type": "percentile_bin",
+            "params": {"col_key": "salary",
+                       "labels": ["Low", "Mid", "High", "Senior"]},
+            "icon": "💼",
+        },
+    ],
+    "Sales": [
+        {
+            "name": "Profit Margin %",
+            "output_col": "Profit_Margin_Pct",
+            "description": "Profit ÷ Revenue × 100",
+            "type": "ratio",
+            "params": {"num_key": "profit", "den_key": "sales", "multiply": 100},
+            "icon": "📊",
+        },
+        {
+            "name": "Revenue per Unit",
+            "output_col": "Revenue_Per_Unit",
+            "description": "Revenue ÷ Quantity",
+            "type": "ratio",
+            "params": {"num_key": "sales", "den_key": "quantity", "multiply": 1},
+            "icon": "📦",
+        },
+        {
+            "name": "Discount Impact",
+            "output_col": "Discount_Impact",
+            "description": "Revenue × Discount % = revenue lost to discount",
+            "type": "two_col_multiply",
+            "params": {"col1_key": "sales", "col2_key": "discount"},
+            "icon": "🏷",
+        },
+        {
+            "name": "Net Revenue (after discount)",
+            "output_col": "Net_Revenue",
+            "description": "Revenue - (Revenue × Discount)",
+            "type": "net_after_discount",
+            "params": {"revenue_key": "sales", "discount_key": "discount"},
+            "icon": "💰",
+        },
+        {
+            "name": "Revenue Growth Flag",
+            "output_col": "Above_Avg_Revenue",
+            "description": "Yes/No — is this order above average revenue?",
+            "type": "above_avg_flag",
+            "params": {"col_key": "sales"},
+            "icon": "🚩",
+        },
+        {
+            "name": "Order Size Band",
+            "output_col": "Order_Size_Band",
+            "description": "Small / Medium / Large / Enterprise based on revenue percentiles",
+            "type": "percentile_bin",
+            "params": {"col_key": "sales",
+                       "labels": ["Small", "Medium", "Large", "Enterprise"]},
+            "icon": "📦",
+        },
+    ],
+    "Marketing": [
+        {
+            "name": "CTR %",
+            "output_col": "CTR_Pct",
+            "description": "Clicks ÷ Impressions × 100",
+            "type": "ratio",
+            "params": {"num_key": "clicks", "den_key": "impressions", "multiply": 100},
+            "icon": "🖱",
+        },
+        {
+            "name": "CVR %",
+            "output_col": "CVR_Pct",
+            "description": "Conversions ÷ Clicks × 100",
+            "type": "ratio",
+            "params": {"num_key": "conversions", "den_key": "clicks", "multiply": 100},
+            "icon": "✅",
+        },
+        {
+            "name": "Cost per Click (CPC)",
+            "output_col": "CPC",
+            "description": "Spend ÷ Clicks",
+            "type": "ratio",
+            "params": {"num_key": "spend", "den_key": "clicks", "multiply": 1},
+            "icon": "💸",
+        },
+        {
+            "name": "Cost per Conversion",
+            "output_col": "Cost_Per_Conversion",
+            "description": "Spend ÷ Conversions",
+            "type": "ratio",
+            "params": {"num_key": "spend", "den_key": "conversions", "multiply": 1},
+            "icon": "💸",
+        },
+        {
+            "name": "ROAS",
+            "output_col": "ROAS",
+            "description": "Revenue ÷ Spend",
+            "type": "ratio",
+            "params": {"num_key": "sales", "den_key": "spend", "multiply": 1},
+            "icon": "📈",
+        },
+    ],
+    "Ecommerce": [
+        {
+            "name": "Profit Margin %",
+            "output_col": "Profit_Margin_Pct",
+            "description": "Profit ÷ Revenue × 100",
+            "type": "ratio",
+            "params": {"num_key": "profit", "den_key": "sales", "multiply": 100},
+            "icon": "📊",
+        },
+        {
+            "name": "Revenue per Unit",
+            "output_col": "Revenue_Per_Unit",
+            "description": "Revenue ÷ Quantity",
+            "type": "ratio",
+            "params": {"num_key": "sales", "den_key": "quantity", "multiply": 1},
+            "icon": "📦",
+        },
+        {
+            "name": "Delivery Status Flag",
+            "output_col": "Late_Delivery",
+            "description": "Yes if delivery > 7 days, No otherwise",
+            "type": "threshold_flag",
+            "params": {"col_key": "delivery", "threshold": 7,
+                       "above_label": "Late", "below_label": "On Time"},
+            "icon": "🚚",
+        },
+    ],
+    "Retail": [
+        {
+            "name": "Profit Margin %",
+            "output_col": "Profit_Margin_Pct",
+            "description": "Profit ÷ Revenue × 100",
+            "type": "ratio",
+            "params": {"num_key": "profit", "den_key": "sales", "multiply": 100},
+            "icon": "📊",
+        },
+        {
+            "name": "Revenue per Unit",
+            "output_col": "Revenue_Per_Unit",
+            "description": "Revenue ÷ Quantity",
+            "type": "ratio",
+            "params": {"num_key": "sales", "den_key": "quantity", "multiply": 1},
+            "icon": "📦",
+        },
+        {
+            "name": "Net Revenue (after discount)",
+            "output_col": "Net_Revenue",
+            "description": "Revenue - (Revenue × Discount)",
+            "type": "net_after_discount",
+            "params": {"revenue_key": "sales", "discount_key": "discount"},
+            "icon": "💰",
+        },
+    ],
+    "Fraud": [
+        {
+            "name": "Amount Band",
+            "output_col": "Amount_Band",
+            "description": "Low / Medium / High / Very High based on amount percentiles",
+            "type": "percentile_bin",
+            "params": {"col_key": "sales",
+                       "labels": ["Low", "Medium", "High", "Very High"]},
+            "icon": "💳",
+        },
+    ],
+    "Generic": [],
+}
+
+
+def _apply_calculation(df, calc_type, params, found):
+    """Apply one calculation and return a Series result."""
+    def gcol(key):
+        return found.get(key)
+
+    if calc_type == "date_diff":
+        start_col = gcol(params["start_key"])
+        # end_key may not be in found — try direct column name too
+        end_col = gcol(params.get("end_key", "")) or params.get("end_col")
+        unit = params.get("unit", "years")
+        if not start_col:
+            return None, f"Start date column '{params['start_key']}' not mapped."
+        start = pd.to_datetime(df[start_col], errors="coerce")
+        if end_col and end_col in df.columns:
+            end = pd.to_datetime(df[end_col], errors="coerce")
+        else:
+            end = pd.Timestamp.today()
+        diff_days = (end - start).dt.days.clip(lower=0)
+        if unit == "years":
+            return (diff_days / 365.25).round(2), None
+        elif unit == "months":
+            return (diff_days / 30.44).round(1), None
+        else:
+            return diff_days, None
+
+    elif calc_type == "formula":
+        col = gcol(params["col_key"])
+        if not col:
+            return None, f"Column '{params['col_key']}' not mapped."
+        s = pd.to_numeric(df[col], errors="coerce")
+        op = params["op"]; val = params["value"]
+        if op == "multiply": return (s * val).round(2), None
+        if op == "divide":   return (s / val).round(2), None
+        if op == "add":      return (s + val).round(2), None
+        if op == "subtract": return (s - val).round(2), None
+        return None, f"Unknown op: {op}"
+
+    elif calc_type == "ratio":
+        num_col = gcol(params["num_key"])
+        den_col = gcol(params["den_key"])
+        if not num_col:
+            return None, f"Numerator column '{params['num_key']}' not mapped."
+        if not den_col:
+            return None, f"Denominator column '{params['den_key']}' not mapped."
+        num = pd.to_numeric(df[num_col], errors="coerce")
+        den = pd.to_numeric(df[den_col], errors="coerce").replace(0, np.nan)
+        return (num / den * params.get("multiply", 1)).round(4), None
+
+    elif calc_type == "two_col_multiply":
+        c1 = gcol(params["col1_key"]); c2 = gcol(params["col2_key"])
+        if not c1 or not c2:
+            return None, "Both columns must be mapped."
+        return (pd.to_numeric(df[c1], errors="coerce") *
+                pd.to_numeric(df[c2], errors="coerce")).round(2), None
+
+    elif calc_type == "net_after_discount":
+        rev_col = gcol(params["revenue_key"])
+        dis_col = gcol(params["discount_key"])
+        if not rev_col:
+            return None, "Revenue column not mapped."
+        rev = pd.to_numeric(df[rev_col], errors="coerce")
+        if dis_col:
+            dis = pd.to_numeric(df[dis_col], errors="coerce").fillna(0)
+            # If discount looks like percentage (0-1 range), treat as fraction
+            if dis.max() <= 1:
+                return (rev * (1 - dis)).round(2), None
+            else:
+                return (rev - dis).round(2), None
+        return rev.round(2), None
+
+    elif calc_type == "bin":
+        col = gcol(params["col_key"])
+        if not col:
+            return None, f"Column '{params['col_key']}' not mapped."
+        s = pd.to_numeric(df[col], errors="coerce")
+        return pd.cut(s, bins=params["bins"], labels=params["labels"],
+                      right=True).astype(str), None
+
+    elif calc_type == "percentile_bin":
+        col = gcol(params["col_key"])
+        if not col:
+            return None, f"Column '{params['col_key']}' not mapped."
+        s = pd.to_numeric(df[col], errors="coerce")
+        labels = params["labels"]
+        n = len(labels)
+        bins = [s.quantile(i/n) for i in range(n+1)]
+        bins[0] -= 0.001  # include minimum
+        try:
+            return pd.cut(s, bins=bins, labels=labels).astype(str), None
+        except Exception:
+            return pd.qcut(s, q=n, labels=labels, duplicates="drop").astype(str), None
+
+    elif calc_type == "above_avg_flag":
+        col = gcol(params["col_key"])
+        if not col:
+            return None, f"Column '{params['col_key']}' not mapped."
+        s = pd.to_numeric(df[col], errors="coerce")
+        return (s >= s.mean()).map({True: "Yes", False: "No"}), None
+
+    elif calc_type == "threshold_flag":
+        col = gcol(params["col_key"])
+        if not col:
+            return None, f"Column '{params['col_key']}' not mapped."
+        s = pd.to_numeric(df[col], errors="coerce")
+        return (s > params["threshold"]).map(
+            {True: params["above_label"], False: params["below_label"]}), None
+
+    elif calc_type == "custom":
+        # Custom formula: col1 op col2 or col op value
+        c1_name = params.get("col1"); c2_name = params.get("col2")
+        op = params.get("op"); val = params.get("value")
+        out_name = params.get("output_col", "Calculated")
+        if c1_name not in df.columns:
+            return None, f"Column '{c1_name}' not found in dataset."
+        s1 = pd.to_numeric(df[c1_name], errors="coerce")
+        if c2_name and c2_name in df.columns:
+            s2 = pd.to_numeric(df[c2_name], errors="coerce")
+            if op == "+": return (s1 + s2).round(4), None
+            if op == "-": return (s1 - s2).round(4), None
+            if op == "*": return (s1 * s2).round(4), None
+            if op == "/": return (s1 / s2.replace(0, np.nan)).round(4), None
+            if op == "date_diff_years":
+                d1 = pd.to_datetime(df[c1_name], errors="coerce")
+                d2 = pd.to_datetime(df[c2_name], errors="coerce")
+                return ((d2 - d1).dt.days / 365.25).round(2), None
+            if op == "date_diff_months":
+                d1 = pd.to_datetime(df[c1_name], errors="coerce")
+                d2 = pd.to_datetime(df[c2_name], errors="coerce")
+                return ((d2 - d1).dt.days / 30.44).round(1), None
+        elif val is not None:
+            if op == "+": return (s1 + val).round(4), None
+            if op == "-": return (s1 - val).round(4), None
+            if op == "*": return (s1 * val).round(4), None
+            if op == "/": return (s1 / (val or np.nan)).round(4), None
+            if op == "%": return (s1 * val / 100).round(4), None
+        return None, "Invalid custom formula parameters."
+
+    return None, "Unknown calculation type."
+
+
+def render_calc_engine(df, found, domain):
+    """Full DAX-style calculated columns panel."""
+    section("🧮 Calculated Columns Engine", domain.lower())
+
+    st.markdown("""<div class="insight-box">
+    <strong>🧮 Build calculated columns like DAX in Power BI.</strong><br>
+    Use <strong>Quick Presets</strong> for common domain calculations (tenure, salary hike, margin %) —
+    or build a <strong>Custom Formula</strong> using any two columns from your dataset.
+    Results can be added as a new column, shown as a chart, or included in the summary.
+    </div>""", unsafe_allow_html=True)
+
+    # Session state for calculated columns
+    if "calc_columns" not in st.session_state:
+        st.session_state.calc_columns = {}  # {output_col: Series}
+
+    tab_preset, tab_custom, tab_results = st.tabs(
+        ["⚡ Quick Presets", "🔧 Custom Formula Builder", "📊 Results & Charts"])
+
+    # ── TAB 1: PRESETS ────────────────────────────────────────────────────
+    with tab_preset:
+        presets = DOMAIN_PRESETS.get(domain, [])
+        if not presets:
+            st.info(f"No presets defined for {domain} domain yet. Use Custom Formula Builder.")
+        else:
+            st.markdown(f"**{len(presets)} preset calculations for {domain} domain:**")
+            # Show in grid
+            cols_g = st.columns(3)
+            for i, p in enumerate(presets):
+                with cols_g[i % 3]:
+                    st.markdown(f"""<div class="insight-box">
+                    <strong>{p['icon']} {p['name']}</strong><br>
+                    <span style="font-size:.82rem;color:#94a3b8">{p['description']}</span>
+                    </div>""", unsafe_allow_html=True)
+
+                    # Check if required columns are mapped
+                    can_run = True
+                    missing = []
+                    pt = p["type"]; pp = p["params"]
+                    needed_keys = []
+                    if pt == "date_diff":
+                        needed_keys = [pp.get("start_key")]
+                    elif pt in ["formula", "bin", "percentile_bin", "above_avg_flag", "threshold_flag"]:
+                        needed_keys = [pp.get("col_key")]
+                    elif pt == "ratio":
+                        needed_keys = [pp.get("num_key"), pp.get("den_key")]
+                    elif pt in ["two_col_multiply", "net_after_discount"]:
+                        needed_keys = [pp.get("col1_key") or pp.get("revenue_key"),
+                                       pp.get("col2_key") or pp.get("discount_key")]
+                    for nk in needed_keys:
+                        if nk and not found.get(nk):
+                            can_run = False
+                            missing.append(nk)
+
+                    if not can_run:
+                        st.caption(f"⚠️ Needs mapped: {', '.join(missing)}")
+                    else:
+                        btn_lbl = ("✅ Applied" if p["output_col"] in st.session_state.calc_columns
+                                   else "➕ Calculate")
+                        if st.button(btn_lbl, key=f"preset_{i}", use_container_width=True):
+                            result, err = _apply_calculation(df, p["type"], p["params"], found)
+                            if err:
+                                st.error(err)
+                            else:
+                                st.session_state.calc_columns[p["output_col"]] = result
+                                st.success(f"✅ '{p['output_col']}' calculated!")
+                                st.rerun()
+
+        # Special: Date-diff preset with custom end column picker
+        st.markdown("---")
+        st.markdown("**📅 Custom Date Difference (e.g. Exit Date − Joining Date = Tenure)**")
+        date_cols = [c for c in df.columns
+                     if pd.api.types.is_datetime64_any_dtype(df[c])
+                     or any(k in c.lower() for k in ["date","time","joined","exit","left","end","start"])]
+        all_cols_list = list(df.columns)
+        dd_c1, dd_c2, dd_c3, dd_c4, dd_c5 = st.columns([2,2,1.5,2,1.5])
+        with dd_c1:
+            dd_start = st.selectbox("Start Date Column", all_cols_list,
+                                    index=all_cols_list.index(found["hire_date"])
+                                    if found.get("hire_date") in all_cols_list else 0,
+                                    key="dd_start")
+        with dd_c2:
+            end_opts = ["Today (current date)"] + all_cols_list
+            dd_end = st.selectbox("End Date Column", end_opts, key="dd_end")
+        with dd_c3:
+            dd_unit = st.selectbox("Unit", ["Years","Months","Days"], key="dd_unit")
+        with dd_c4:
+            dd_out = st.text_input("New Column Name", value="Tenure_Years", key="dd_out")
+        with dd_c5:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("➕ Calculate", key="dd_calc", use_container_width=True):
+                d1 = pd.to_datetime(df[dd_start], errors="coerce")
+                if dd_end == "Today (current date)":
+                    d2 = pd.Timestamp.today()
+                else:
+                    d2 = pd.to_datetime(df[dd_end], errors="coerce")
+                diff = (d2 - d1).dt.days.clip(lower=0)
+                if dd_unit == "Years":   result = (diff / 365.25).round(2)
+                elif dd_unit == "Months": result = (diff / 30.44).round(1)
+                else:                     result = diff
+                col_name = dd_out.strip().replace(" ", "_") or "Date_Diff"
+                st.session_state.calc_columns[col_name] = result
+                st.success(f"✅ '{col_name}' calculated!")
+                st.rerun()
+
+    # ── TAB 2: CUSTOM FORMULA BUILDER ────────────────────────────────────
+    with tab_custom:
+        st.markdown("**🔧 Build your own formula using any columns:**")
+
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        all_col_list = list(df.columns)
+
+        cb_c1, cb_c2, cb_c3, cb_c4, cb_c5, cb_c6 = st.columns([2, 1.5, 2, 0.5, 2, 2])
+
+        with cb_c1:
+            col1_sel = st.selectbox("Column 1", all_col_list, key="cb_col1")
+        with cb_c2:
+            op_sel = st.selectbox("Operation", [
+                "+ (Add)", "− (Subtract)", "× (Multiply)", "÷ (Divide)",
+                "Date Diff (Years)", "Date Diff (Months)", "Date Diff (Days)",
+                "% of (col1 × value%)", "Inverse (1 ÷ col1)"
+            ], key="cb_op")
+        with cb_c3:
+            use_col2 = op_sel not in ["Inverse (1 ÷ col1)"]
+            if "Date Diff" in op_sel:
+                col2_opts = ["Today"] + all_col_list
+                col2_sel = st.selectbox("Column 2 / End Date", col2_opts, key="cb_col2")
+                val_sel = None
+            elif use_col2:
+                mode = st.radio("Use:", ["Another Column", "A Fixed Value"],
+                                horizontal=True, key="cb_mode")
+                if mode == "Another Column":
+                    col2_sel = st.selectbox("Column 2", all_col_list, key="cb_col2b")
+                    val_sel = None
+                else:
+                    col2_sel = None
+                    val_sel = st.number_input("Fixed Value", value=1.0, key="cb_val")
+            else:
+                col2_sel = None; val_sel = None
+                st.caption("No second input needed.")
+
+        with cb_c4:
+            st.markdown("**=**")
+        with cb_c5:
+            out_name = st.text_input("Result Column Name", value="My_Calculation", key="cb_out")
+        with cb_c6:
+            st.markdown("<br>", unsafe_allow_html=True)
+            calc_btn = st.button("➕ Calculate & Add", key="cb_calc", use_container_width=True, type="primary")
+
+        # Formula preview
+        op_clean = op_sel.split(" ")[0]
+        if "Date Diff" in op_sel:
+            st.caption(f"Preview: **{out_name}** = ({col2_sel if col2_sel else 'Today'} − {col1_sel}) in {op_sel.split('(')[1].rstrip(')')}")
+        elif col2_sel:
+            st.caption(f"Preview: **{out_name}** = {col1_sel} {op_clean} {col2_sel}")
+        elif val_sel is not None:
+            st.caption(f"Preview: **{out_name}** = {col1_sel} {op_clean} {val_sel}")
+
+        if calc_btn:
+            out_col = out_name.strip().replace(" ", "_") or "Calculated"
+            result = None; err_msg = None
+
+            op_map = {
+                "+ (Add)": "+", "− (Subtract)": "-",
+                "× (Multiply)": "*", "÷ (Divide)": "/",
+                "% of (col1 × value%)": "%", "Inverse (1 ÷ col1)": "inv",
+            }
+
+            if "Date Diff" in op_sel:
+                d1 = pd.to_datetime(df[col1_sel], errors="coerce")
+                if col2_sel == "Today" or col2_sel is None:
+                    d2 = pd.Timestamp.today()
+                else:
+                    d2 = pd.to_datetime(df[col2_sel], errors="coerce")
+                diff_d = (d2 - d1).dt.days.clip(lower=0)
+                if "Years"  in op_sel: result = (diff_d / 365.25).round(2)
+                elif "Months" in op_sel: result = (diff_d / 30.44).round(1)
+                else: result = diff_d
+
+            elif op_sel == "Inverse (1 ÷ col1)":
+                s = pd.to_numeric(df[col1_sel], errors="coerce").replace(0, np.nan)
+                result = (1 / s).round(4)
+
+            else:
+                raw_op = op_map.get(op_sel, "+")
+                c1s = pd.to_numeric(df[col1_sel], errors="coerce")
+                if col2_sel:
+                    c2s = pd.to_numeric(df[col2_sel], errors="coerce")
+                    if raw_op == "+": result = (c1s + c2s).round(4)
+                    elif raw_op == "-": result = (c1s - c2s).round(4)
+                    elif raw_op == "*": result = (c1s * c2s).round(4)
+                    elif raw_op == "/": result = (c1s / c2s.replace(0, np.nan)).round(4)
+                elif val_sel is not None:
+                    if raw_op == "+": result = (c1s + val_sel).round(4)
+                    elif raw_op == "-": result = (c1s - val_sel).round(4)
+                    elif raw_op == "*": result = (c1s * val_sel).round(4)
+                    elif raw_op == "/": result = (c1s / (val_sel or np.nan)).round(4)
+                    elif raw_op == "%": result = (c1s * val_sel / 100).round(4)
+                else:
+                    err_msg = "Please select Column 2 or enter a fixed value."
+
+            if err_msg:
+                st.error(err_msg)
+            elif result is not None:
+                result.name = out_col
+                st.session_state.calc_columns[out_col] = result
+                st.success(f"✅ '{out_col}' calculated successfully! View in Results tab.")
+                st.rerun()
+
+    # ── TAB 3: RESULTS & CHARTS ───────────────────────────────────────────
+    with tab_results:
+        if not st.session_state.calc_columns:
+            st.info("No calculated columns yet. Use Quick Presets or Custom Formula Builder to create some.")
+        else:
+            st.markdown(f"**{len(st.session_state.calc_columns)} calculated column(s) ready:**")
+
+            # Build working df with all calc cols added
+            df_calc = df.copy()
+            for col_name, series in st.session_state.calc_columns.items():
+                try:
+                    df_calc[col_name] = series.values
+                except Exception:
+                    df_calc[col_name] = series
+
+            calc_col_names = list(st.session_state.calc_columns.keys())
+
+            for col_name, series in st.session_state.calc_columns.items():
+                with st.expander(f"📊 {col_name}", expanded=True):
+                    r1, r2, r3, r4 = st.columns(4)
+
+                    is_numeric = pd.api.types.is_numeric_dtype(series)
+
+                    if is_numeric:
+                        s = series.dropna()
+                        r1.metric("Min",    f"{s.min():,.2f}")
+                        r2.metric("Max",    f"{s.max():,.2f}")
+                        r3.metric("Mean",   f"{s.mean():,.2f}")
+                        r4.metric("Median", f"{s.median():,.2f}")
+
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            fig = px.histogram(df_calc, x=col_name, nbins=30,
+                                               title=f"{col_name} — Distribution",
+                                               color_discrete_sequence=[C["blue"]],
+                                               marginal="box")
+                            fig.update_layout(**cd(360))
+                            st.plotly_chart(fig, use_container_width=True)
+
+                        with c2:
+                            # Cross with a categorical column if available
+                            cat_options = [c for c in df.columns
+                                           if df[c].dtype == object and df[c].nunique() <= 20]
+                            if cat_options:
+                                cross_col = st.selectbox(
+                                    f"Compare {col_name} by:", cat_options,
+                                    key=f"cross_{col_name}")
+                                grp = df_calc.groupby(cross_col)[col_name].mean().sort_values(ascending=False).reset_index()
+                                fig2 = px.bar(grp, x=cross_col, y=col_name,
+                                              title=f"Avg {col_name} by {cross_col}",
+                                              color=col_name,
+                                              color_continuous_scale="Blues",
+                                              text_auto=".2f")
+                                fig2.update_layout(**cd(360))
+                                st.plotly_chart(fig2, use_container_width=True)
+                            else:
+                                # Scatter vs a numeric col
+                                if found.get("salary") and col_name != found.get("salary"):
+                                    fig2 = px.scatter(df_calc.sample(min(500, len(df_calc))),
+                                                      x=found["salary"], y=col_name,
+                                                      title=f"Salary vs {col_name}",
+                                                      opacity=0.6,
+                                                      color_discrete_sequence=[C["purple"]])
+                                    fig2.update_layout(**cd(360))
+                                    st.plotly_chart(fig2, use_container_width=True)
+                    else:
+                        # Categorical result — value counts
+                        vc = series.astype(str).value_counts().reset_index()
+                        vc.columns = [col_name, "Count"]
+                        r1.metric("Categories", f"{series.nunique():,}")
+                        r2.metric("Most Common", str(series.mode().iloc[0]) if len(series.mode()) > 0 else "N/A")
+                        r3.metric("Total Rows", f"{len(series):,}")
+                        r4.metric("Null Count", f"{series.isna().sum():,}")
+
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            fig = px.bar(vc, x=col_name, y="Count",
+                                         title=f"{col_name} — Distribution",
+                                         color="Count",
+                                         color_continuous_scale="Blues",
+                                         text_auto=True)
+                            fig.update_layout(**cd(360))
+                            st.plotly_chart(fig, use_container_width=True)
+                        with c2:
+                            fig2 = px.pie(vc, values="Count", names=col_name,
+                                          title=f"{col_name} — Share",
+                                          hole=0.4,
+                                          color_discrete_sequence=px.colors.qualitative.Set2)
+                            fig2.update_layout(**cd(360))
+                            st.plotly_chart(fig2, use_container_width=True)
+
+                        # Cross with numeric if possible
+                        base_num = found.get("salary") or found.get("sales")
+                        if base_num:
+                            grp2 = df_calc.groupby(col_name)[base_num].mean().sort_values(ascending=False).reset_index()
+                            fig3 = px.bar(grp2, x=col_name, y=base_num,
+                                          title=f"Avg {base_num} by {col_name}",
+                                          color=base_num,
+                                          color_continuous_scale="Purples",
+                                          text_auto=".0f")
+                            fig3.update_layout(**cd(360))
+                            st.plotly_chart(fig3, use_container_width=True)
+
+                    # Action buttons
+                    ba, bb, bc = st.columns(3)
+                    with ba:
+                        if st.button(f"🗑 Remove {col_name}", key=f"del_{col_name}"):
+                            del st.session_state.calc_columns[col_name]
+                            st.rerun()
+                    with bb:
+                        # Download just this column merged with key identifier columns
+                        id_cols = [c for c in [found.get("employee_id"), found.get("employee_name"),
+                                               found.get("customer"), found.get("order_id")] if c]
+                        export_df = df_calc[id_cols + [col_name]] if id_cols else df_calc[[col_name]]
+                        csv_bytes = export_df.to_csv(index=False).encode()
+                        st.download_button(f"⬇️ Download {col_name}",
+                                           data=csv_bytes,
+                                           file_name=f"{col_name}.csv",
+                                           mime="text/csv",
+                                           key=f"dl_{col_name}")
+                    with bc:
+                        st.caption(f"dtype: {series.dtype} | {series.notna().sum():,} non-null values")
+
+            st.markdown("---")
+            # Download ALL calculated columns merged into full dataset
+            if st.button("⬇️ Download Full Dataset with All Calculated Columns",
+                         type="primary", key="dl_all_calc"):
+                csv_full = df_calc.to_csv(index=False).encode()
+                st.download_button("📥 Download CSV",
+                                   data=csv_full,
+                                   file_name="dataset_with_calculated_columns.csv",
+                                   mime="text/csv",
+                                   key="dl_all_csv")
+
+            # Summary table of all calc cols
+            st.markdown("**Summary of all calculated columns:**")
+            summary_rows = []
+            for cn, ser in st.session_state.calc_columns.items():
+                is_num = pd.api.types.is_numeric_dtype(ser)
+                summary_rows.append({
+                    "Column": cn,
+                    "Type": "Numeric" if is_num else "Categorical",
+                    "Min / Most Common": f"{ser.dropna().min():,.2f}" if is_num else str(ser.mode().iloc[0]) if len(ser.mode()) > 0 else "",
+                    "Max / Categories": f"{ser.dropna().max():,.2f}" if is_num else f"{ser.nunique()} categories",
+                    "Mean / Avg": f"{ser.dropna().mean():,.2f}" if is_num else "",
+                    "Null Count": f"{ser.isna().sum():,}",
+                })
+            st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  MAIN
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2327,6 +3061,7 @@ def main():
     elif domain=="Fraud":       render_fraud(df, found)
     else:                       render_generic(df, found)
 
+    render_calc_engine(df, found, domain)
     render_summary(df, found, domain)
     render_qa(df, domain, found)
     render_nlq(df, domain, found)
