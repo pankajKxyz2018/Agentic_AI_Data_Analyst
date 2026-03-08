@@ -1,11 +1,26 @@
 # ============================================================
 #  master_pipeline.py  —  Universal Agentic AI Data Analyst
-#  v3 — Fully Data-Driven Domain-Specific KPIs & Charts
+#  v8 — Multi-Tenant Login System + All Previous Features
 #  Domains: Sales · Marketing · HR · Ecommerce · Retail · Fraud · Generic
 # ============================================================
 
 import os, io, re, tempfile, sqlite3
 import streamlit as st
+
+# ─── Auth Import ──────────────────────────────────────────────────────────────
+try:
+    from auth import (render_login_page, render_user_header, render_admin_panel,
+                      is_logged_in, is_admin, get_tenant_id, check_plan_limit)
+    AUTH_ENABLED = True
+except ImportError:
+    AUTH_ENABLED = False
+    def is_logged_in(): return True
+    def is_admin(): return False
+    def get_tenant_id(): return "default"
+    def check_plan_limit(f): return True
+    def render_login_page(): pass
+    def render_user_header(): pass
+    def render_admin_panel(): pass
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -4312,9 +4327,47 @@ def render_prescriptive(df, found, domain):
 #  MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 def main():
+
+    # ── LOGIN GATE ─────────────────────────────────────────────────────────────
+    if AUTH_ENABLED and not is_logged_in():
+        render_login_page()
+        return
+
+    # ── ADMIN PANEL ────────────────────────────────────────────────────────────
+    if AUTH_ENABLED and is_admin():
+        with st.sidebar:
+            if st.sidebar.button("👑 Admin Panel", use_container_width=True):
+                st.session_state["show_admin"] = not st.session_state.get("show_admin", False)
+        if st.session_state.get("show_admin", False):
+            render_admin_panel()
+            return
+
     with st.sidebar:
         st.markdown("## 📊 Agentic AI\n### Data Analyst")
         st.markdown("---")
+
+        # ── USER INFO ──────────────────────────────────────────────────────────
+        if AUTH_ENABLED:
+            name = st.session_state.get("user_name", "User")
+            company = st.session_state.get("user_company", "")
+            plan = st.session_state.get("user_plan", "Starter").title()
+            st.markdown(
+                f"""<div style="background:linear-gradient(135deg,#0d1829,#0f2040);
+                    border:1px solid #1a2d4a;border-radius:12px;padding:12px 16px;margin-bottom:8px">
+                    <div style="font-size:0.75rem;color:#64748b">Welcome back</div>
+                    <div style="font-weight:700;color:#e2e8f0">{name}</div>
+                    <div style="font-size:0.75rem;color:#0ea5e9">{company}</div>
+                    <div style="font-size:0.7rem;background:rgba(14,165,233,0.1);color:#0ea5e9;
+                        border-radius:4px;padding:2px 8px;margin-top:6px;display:inline-block">
+                        {plan} Plan</div>
+                </div>""",
+                unsafe_allow_html=True
+            )
+            if st.button("🚪 Logout", use_container_width=True):
+                from auth import logout
+                logout()
+            st.markdown("---")
+
         st.markdown("**🗂 Formats:** CSV · Excel · XML · HTML · PDF · SQLite")
         st.markdown("---")
         st.markdown("**🎯 Domains**\n💼 Sales · 📣 Marketing\n👥 HR · 🛒 Ecommerce\n🏪 Retail · 🚨 Fraud · 🔍 Generic")
