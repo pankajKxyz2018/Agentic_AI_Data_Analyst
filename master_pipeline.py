@@ -10,7 +10,7 @@ import streamlit as st
 # ─── Auth Import ──────────────────────────────────────────────────────────────
 try:
     from auth import (render_login_page, render_user_header, render_admin_panel,
-                      is_logged_in, is_admin, get_tenant_id, check_plan_limit)
+                      is_logged_in, is_admin, get_tenant_id, check_plan_limit, get_plan_file_limit_mb)
     AUTH_ENABLED = True
 except ImportError:
     AUTH_ENABLED = False
@@ -18,6 +18,7 @@ except ImportError:
     def is_admin(): return False
     def get_tenant_id(): return "default"
     def check_plan_limit(f): return True
+    def get_plan_file_limit_mb(): return 200
     def render_login_page(): pass
     def render_user_header(): pass
     def render_admin_panel(): pass
@@ -4383,6 +4384,26 @@ def main():
 
     f = st.file_uploader("📂 Drop your data file here",
         type=["csv","txt","xlsx","xls","xml","html","htm","pdf","db","sqlite"])
+
+    # ── FILE SIZE ENFORCEMENT ─────────────────────────────────────────
+    if f is not None:
+        max_mb = get_plan_file_limit_mb() if AUTH_ENABLED else 200
+        file_mb = f.size / (1024 * 1024)
+        if file_mb > max_mb:
+            plan = "Starter" if max_mb == 50 else "Business"
+            st.error(f"""
+### 🚫 File Too Large — {file_mb:.1f}MB uploaded, {max_mb}MB allowed on your {plan} plan
+
+**Your plan limits:**
+| Plan | File Size | Price |
+|------|-----------|-------|
+| Starter | 50MB | ₹2,000/month |
+| Business | 200MB | ₹8,000/month |
+| Enterprise | Custom | ₹25,000/month |
+
+👉 **[Upgrade your plan](mailto:pankaj@1clickdataanalysis.com?subject=Plan Upgrade Request)** to upload larger files.
+""")
+            st.stop()
 
     if not f:
         cols=st.columns(3)
