@@ -5108,14 +5108,15 @@ def main():
                 if not is_active:
                     st.caption("These columns are not typically used for the detected domain. "
                                "You can still manually map them if needed.")
-                cols = st.columns(3)
+                # Create a new row of 3 columns every 3 items — prevents all-in-one-line bug
                 for i,(key,lbl,opts) in enumerate(keys):
+                    if i % 3 == 0:
+                        cols = st.columns(3)
                     cur = found.get(key, NONE)
                     safe_cur = cur if cur in opts else NONE
                     idx = opts.index(safe_cur)
-                    # For inactive sections, lock to NONE unless user already mapped it
                     disabled = (not is_active and safe_cur == NONE)
-                    chosen = cols[i%3].selectbox(
+                    chosen = cols[i % 3].selectbox(
                         lbl,
                         opts,
                         index=idx,
