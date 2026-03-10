@@ -30,6 +30,58 @@ from plotly.subplots import make_subplots
 import dask.dataframe as dd
 import chardet
 
+# ─── Global Currency & Locale Utilities ───────────────────────────────────────
+def detect_currency(df):
+    """Auto-detect currency symbol from column names or data values."""
+    col_lower = " ".join(df.columns).lower()
+    # Check column names for currency hints
+    if any(k in col_lower for k in ["gbp","pound","sterling","£"]): return "£"
+    if any(k in col_lower for k in ["eur","euro","€"]): return "€"
+    if any(k in col_lower for k in ["inr","rupee","₹","rs.","rs "]): return "₹"
+    if any(k in col_lower for k in ["jpy","yen","¥","cny","yuan"]): return "¥"
+    if any(k in col_lower for k in ["aud","cad","sgd","nzd"]): return "$"
+    if any(k in col_lower for k in ["usd","dollar","$"]): return "$"
+    # Check string values in numeric-looking columns for currency symbols
+    for col in df.select_dtypes(include="object").columns[:5]:
+        sample = df[col].dropna().astype(str).head(20).str.cat()
+        if "£" in sample: return "£"
+        if "€" in sample: return "€"
+        if "₹" in sample or "Rs" in sample: return "₹"
+        if "¥" in sample: return "¥"
+    return "$"  # default
+
+def fmt_money(val, symbol="$", decimals=2):
+    """Format a monetary value with currency symbol."""
+    if decimals == 0:
+        return f"{symbol}{val:,.0f}"
+    return f"{symbol}{val:,.{decimals}f}"
+
+def normalize_gender(series):
+    """Normalize gender values from global datasets to Male/Female/Other."""
+    mapping = {
+        "m": "Male", "male": "Male", "man": "Male", "men": "Male",
+        "masculino": "Male", "homme": "Male", "männlich": "Male",
+        "f": "Female", "female": "Female", "woman": "Female", "women": "Female",
+        "femenino": "Female", "femme": "Female", "weiblich": "Female",
+        "non-binary": "Other", "nonbinary": "Other", "nb": "Other",
+        "other": "Other", "prefer not to say": "Other", "unknown": "Other",
+    }
+    return series.astype(str).str.lower().str.strip().map(
+        lambda x: mapping.get(x, x.title())
+    )
+
+def parse_dates_robust(series):
+    """Parse dates robustly handling DD/MM/YYYY, MM/DD/YYYY, YYYY-MM-DD etc."""
+    try:
+        # Try standard parse first
+        result = pd.to_datetime(series, errors="coerce", infer_datetime_format=True)
+        # If >50% failed, try dayfirst (European format)
+        if result.isna().mean() > 0.5:
+            result = pd.to_datetime(series, errors="coerce", dayfirst=True)
+        return result
+    except:
+        return pd.to_datetime(series, errors="coerce")
+
 # ─── Page Config ──────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Agentic AI Data Analyst", page_icon="📊",
                    layout="wide", initial_sidebar_state="expanded")
@@ -146,7 +198,7 @@ def clean_data(df):
     df = df.drop_duplicates().ffill().bfill()
     for col in df.columns:
         if any(k in col.lower() for k in ["date","time","period","month","year"]):
-            try: df[col]=pd.to_datetime(df[col],errors="coerce")
+            try: df[col]=parse_dates_robust(df[col])
             except: pass
     return df
 
@@ -172,7 +224,9 @@ def detect_columns(df):
                         "sku","product code","product id","goods","merchandise","article"],
         "sub_category":["sub category","sub-category","subcategory","product sub category"],
         "category":    ["category","product category","product group","product type","brand","class","line"],
-        "region":      ["region","territory","area","zone","market","geography"],
+        "region":      ["region","territory","area","zone","market","geography",
+                        "sales_region","sales region","district","division","cluster",
+                        "continent","sub_region","sub region"],
         "city":        ["city","town","municipality"],
         "state":       ["state","province","county"],
         "country":     ["country","nation","country name"],
@@ -189,12 +243,16 @@ def detect_columns(df):
         "age":         ["age","employee age"],
         "age_group":   ["age group","age band","age bracket","age range"],
         "tenure":      ["tenure","years of service","experience","years at company","seniority",
-                        "service years","employment duration","years in company"],
+                        "service years","employment duration","years in company",
+                        "yearsatcompany","years_at_company","total working years",
+                        "totalworkingyears","years_in_current_role","yearsinrole"],
         "hire_date":   ["hire date","joining date","start date","date of joining","doj","date joined",
                         "employment date","onboard date"],
         "attrition":   ["attrition","left company","churn","resigned","turnover","exit",
-                        "is churned","employee status","employment status","status","left"],
-        "job_title":   ["job title","designation","position","role","job role","title","job level"],
+                        "is churned","employee status","employment status","status","left",
+                        "voluntary_termination","is_active","active_status","separation"],
+        "job_title":   ["job title","designation","position","role","job role","title","job level",
+                        "jobrole","joblevel","job_level","job_role","grade","band","pay_grade"],
         "performance": ["performance","performance rating","perf rating","rating","appraisal",
                         "performance score","review score"],
         "education":   ["education","qualification","degree","education level"],
@@ -219,7 +277,12 @@ def detect_columns(df):
         "roi":         ["roi","roas","return on investment","return on ad spend"],
         "price":       ["unit price","selling price","list price","mrp","price","rate","retail price"],
         "cost":        ["unit cost","cost of goods","cogs","purchase price","product cost","cost"],
-        "order_id":    ["order id","order no","orderid","transaction id","invoice id","order number"],
+        "order_id":    ["order id","order no","orderid","transaction id","invoice id","order number",
+                        "purchase id","booking id","reference no","ref no","confirmation number"],
+        "return_reason":["return reason","reason for return","refund reason","cancellation reason"],
+        "shipping_country":["shipping country","ship to country","delivery country","destination country"],
+        "loyalty_points":["loyalty points","reward points","points earned","points balance","miles"],
+        "device":       ["device","device type","platform","os","browser","user agent","channel device"],
         "ship_mode":   ["ship mode","shipping mode","delivery mode","shipment type","ship method"],
         "segment":     ["customer segment","market segment","customer type","business segment"],
     }
@@ -283,7 +346,9 @@ def detect_columns(df):
 # ─── Fraud Check ──────────────────────────────────────────────────────────────
 def is_fraud_dataset(df):
     cl = [c.lower().strip() for c in df.columns]
-    fraud_cols = ["class","label","fraud","is_fraud","isfraud","target","is fraud"]
+    fraud_cols = ["class","label","fraud","is_fraud","isfraud","target","is fraud",
+                  "fraud_flag","fraudulent","is_fraudulent","fraud_ind","fraud_indicator",
+                  "transaction_type","suspicious","anomaly","flagged"]
     if not any(c in cl for c in fraud_cols): return False
     v_cols = sum(1 for c in cl if len(c)>1 and c[0]=="v" and c[1:].isdigit())
     has_amount = "amount" in cl; has_time = "time" in cl
@@ -380,6 +445,7 @@ def prep_date(df, dcol, vcol):
 #  SALES DOMAIN
 # ══════════════════════════════════════════════════════════════════════════════
 def render_sales(df, found):
+    _cur = detect_currency(df)  # auto-detect currency
     dom = "Sales"; ac = C["blue"]
     sc  = found.get("sales");    pc   = found.get("profit")
     prd = found.get("product");  cat  = found.get("category")
@@ -394,12 +460,12 @@ def render_sales(df, found):
     kpis = []
     if sc:
         s = df[sc].dropna()
-        kpis += [("💰 Total Revenue",   f"{s.sum():,.2f}", None),
-                 ("📈 Avg Order Value",  f"{s.mean():,.2f}", None),
-                 ("🔝 Max Order",        f"{s.max():,.2f}", None)]
+        kpis += [("💰 Total Revenue",   fmt_money(s.sum(),_cur), None),
+                 ("📈 Avg Order Value",  fmt_money(s.mean(),_cur), None),
+                 ("🔝 Max Order",        fmt_money(s.max(),_cur), None)]
     if pc:
         p = df[pc].dropna()
-        kpis.append(("🏆 Total Profit", f"{p.sum():,.2f}", None))
+        kpis.append(("🏆 Total Profit", fmt_money(p.sum(),_cur), None))
         if sc: kpis.append(("📊 Profit Margin", f"{p.sum()/df[sc].sum()*100:.1f}%", None))
     if qty: kpis.append(("📦 Total Units",   f"{df[qty].sum():,.0f}", None))
     if cus: kpis.append(("👥 Customers",     f"{df[cus].nunique():,}", None))
@@ -654,6 +720,7 @@ def render_sales(df, found):
 # ══════════════════════════════════════════════════════════════════════════════
 def render_hr(df, found):
     dom = "HR"; ac = C["purple"]
+    _cur = detect_currency(df)  # auto-detect currency
     sal  = found.get("salary");    dept = found.get("department")
     attr = found.get("attrition"); gen  = found.get("gender")
     age  = found.get("age");       ten  = found.get("tenure")
@@ -674,22 +741,26 @@ def render_hr(df, found):
 
     if sal:
         s = df[sal].dropna()
-        kpis += [("💰 Total Payroll",   f"{s.sum():,.0f}", None),
-                 ("📈 Avg Salary",      f"{s.mean():,.0f}", None),
-                 ("🔝 Highest Salary",  f"{s.max():,.0f}", None),
-                 ("🔽 Lowest Salary",   f"{s.min():,.0f}", None),
-                 ("📊 Median Salary",   f"{s.median():,.0f}", None)]
+        kpis += [("💰 Total Payroll",   fmt_money(s.sum(),_cur,0), None),
+                 ("📈 Avg Salary",      fmt_money(s.mean(),_cur,0), None),
+                 ("🔝 Highest Salary",  fmt_money(s.max(),_cur,0), None),
+                 ("🔽 Lowest Salary",   fmt_money(s.min(),_cur,0), None),
+                 ("📊 Median Salary",   fmt_money(s.median(),_cur,0), None)]
 
     if gen:
-        gc = df[gen].astype(str).str.title().value_counts()
-        male   = gc.get("Male",   gc.get("M", 0))
-        female = gc.get("Female", gc.get("F", 0))
+        _gen_norm = normalize_gender(df[gen])
+        gc = _gen_norm.value_counts()
+        male   = gc.get("Male",   0)
+        female = gc.get("Female", 0)
+        other  = gc.get("Other",  0)
         kpis += [("👨 Male Employees",   f"{int(male):,}", None),
                  ("👩 Female Employees", f"{int(female):,}", None)]
+        if other > 0:
+            kpis.append(("🧑 Other/Non-Binary", f"{int(other):,}", None))
         if sal and male>0 and female>0:
-            df2=df.copy(); df2["_gen"]=df2[gen].astype(str).str.title()
-            m_sal=df2[df2["_gen"].isin(["Male","M"])][sal].mean()
-            f_sal=df2[df2["_gen"].isin(["Female","F"])][sal].mean()
+            df2=df.copy(); df2["_gen"]=normalize_gender(df2[gen])
+            m_sal=df2[df2["_gen"]=="Male"][sal].mean()
+            f_sal=df2[df2["_gen"]=="Female"][sal].mean()
             gap=abs(m_sal-f_sal)/max(m_sal,f_sal)*100
             kpis.append(("⚖️ Gender Pay Gap", f"{gap:.1f}%", None))
 
@@ -941,6 +1012,7 @@ def render_hr(df, found):
 #  MARKETING DOMAIN
 # ══════════════════════════════════════════════════════════════════════════════
 def render_marketing(df, found):
+    _cur = detect_currency(df)
     dom = "Marketing"; ac = C["red"]
     sp   = found.get("spend");   rev  = found.get("sales")
     chan = found.get("channel"); imp  = found.get("impressions")
@@ -950,8 +1022,8 @@ def render_marketing(df, found):
 
     section("📌 Marketing KPIs", dom)
     kpis=[]
-    if sp:   kpis.append(("💸 Total Spend",      f"{df[sp].sum():,.2f}", None))
-    if rev:  kpis.append(("💰 Total Revenue",    f"{df[rev].sum():,.2f}", None))
+    if sp:   kpis.append(("💸 Total Spend",      fmt_money(df[sp].sum(),_cur), None))
+    if rev:  kpis.append(("💰 Total Revenue",    fmt_money(df[rev].sum(),_cur), None))
     if sp and rev:
         roi_v=(df[rev].sum()-df[sp].sum())/df[sp].sum()*100
         kpis.append(("📈 Overall ROI", f"{roi_v:.1f}%", None))
@@ -1037,6 +1109,7 @@ def render_marketing(df, found):
 #  ECOMMERCE DOMAIN
 # ══════════════════════════════════════════════════════════════════════════════
 def render_ecommerce(df, found):
+    _cur = detect_currency(df)
     dom="Ecommerce"; ac=C["green"]
     sc=found.get("sales");    prd=found.get("product"); cat=found.get("category")
     cus=found.get("customer");pc=found.get("profit");   dc=found.get("date")
@@ -1045,9 +1118,9 @@ def render_ecommerce(df, found):
 
     section("📌 Ecommerce KPIs", dom)
     kpis=[]
-    if sc:   kpis+=[("💰 Total Revenue",f"{df[sc].sum():,.2f}",None),
-                    ("📈 Avg Order",f"{df[sc].mean():,.2f}",None)]
-    if pc:   kpis.append(("🏆 Total Profit",f"{df[pc].sum():,.2f}",None))
+    if sc:   kpis+=[("💰 Total Revenue",fmt_money(df[sc].sum(),_cur),None),
+                    ("📈 Avg Order",fmt_money(df[sc].mean(),_cur),None)]
+    if pc:   kpis.append(("🏆 Total Profit",fmt_money(df[pc].sum(),_cur),None))
     if sc and pc: kpis.append(("📊 Margin",f"{df[pc].sum()/df[sc].sum()*100:.1f}%",None))
     if qty:  kpis.append(("📦 Units Sold",f"{df[qty].sum():,.0f}",None))
     if cus:  kpis.append(("👥 Customers",f"{df[cus].nunique():,}",None))
@@ -1112,6 +1185,7 @@ def render_ecommerce(df, found):
 #  RETAIL DOMAIN
 # ══════════════════════════════════════════════════════════════════════════════
 def render_retail(df, found):
+    _cur = detect_currency(df)
     dom="Retail"; ac=C["yellow"]
     sc=found.get("sales"); store=found.get("store"); prd=found.get("product")
     cat=found.get("category"); pc=found.get("profit"); dis=found.get("discount")
@@ -1119,9 +1193,9 @@ def render_retail(df, found):
 
     section("📌 Retail KPIs", dom)
     kpis=[]
-    if sc:    kpis+=[("💰 Total Revenue",f"{df[sc].sum():,.2f}",None),
-                     ("📈 Avg Transaction",f"{df[sc].mean():,.2f}",None)]
-    if pc:    kpis.append(("🏆 Total Profit",f"{df[pc].sum():,.2f}",None))
+    if sc:    kpis+=[("💰 Total Revenue",fmt_money(df[sc].sum(),_cur),None),
+                     ("📈 Avg Transaction",fmt_money(df[sc].mean(),_cur),None)]
+    if pc:    kpis.append(("🏆 Total Profit",fmt_money(df[pc].sum(),_cur),None))
     if sc and pc: kpis.append(("📊 Margin",f"{df[pc].sum()/df[sc].sum()*100:.1f}%",None))
     if qty:   kpis.append(("📦 Units",f"{df[qty].sum():,.0f}",None))
     if store: kpis+=[("🏪 Stores",f"{df[store].nunique():,}",None)]
@@ -1184,6 +1258,7 @@ def render_fraud(df, found):
     df2["_status"]=df2["_lbl"].map({0:"✅ Legitimate",1:"🚨 Fraud"})
     total=len(df2); fraud_ct=int(df2["_lbl"].sum()); legit_ct=total-fraud_ct
     fraud_pct=fraud_ct/total*100
+    cur = detect_currency(df)  # auto-detect currency symbol
 
     section("🚨 Fraud Detection KPIs", dom)
     kpis=[("Total Transactions",f"{total:,}",None),
@@ -1194,12 +1269,11 @@ def render_fraud(df, found):
         fa=df2[df2["_lbl"]==1][amt_col].dropna()
         la=df2[df2["_lbl"]==0][amt_col].dropna()
         if len(fa)>0:
-                kpis+=[("Avg Fraudulent Amount",f"${fa.mean():,.2f}",None),
-                       ("Avg Legitimate Amount", f"${la.mean():,.2f}",None),
-                       ("Total Fraud Exposure",  f"${fa.sum():,.2f}",None)]
+                kpis+=[("Avg Fraudulent Amount",fmt_money(fa.mean(),cur),None),
+                       ("Avg Legitimate Amount", fmt_money(la.mean(),cur),None),
+                       ("Total Fraud Exposure",  fmt_money(fa.sum(),cur),None)]
     show_metrics(kpis)
 
-    show_metrics(kpis)
 
     # ── Key Fraud Insight ─────────────────────────────────────────────────
     if amt_col and len(fa)>0:
@@ -1213,10 +1287,10 @@ def render_fraud(df, found):
         )
         insight(
             f"🔍 <strong>Fraud Pattern Detected:</strong> Average fraudulent transaction "
-            f"(<strong>${fa.mean():,.2f}</strong>) is <strong>{abs(pct_higher):.1f}% {direction}</strong> "
-            f"than average legitimate transaction (<strong>${la.mean():,.2f}</strong>). {reason} "
+            f"(<strong>{fmt_money(fa.mean(),cur)}</strong>) is <strong>{abs(pct_higher):.1f}% {direction}</strong> "
+            f"than average legitimate transaction (<strong>{fmt_money(la.mean(),cur)}</strong>). {reason} "
             f"Despite only <strong>{fraud_pct:.4f}%</strong> of transactions being fraudulent, "
-            f"total financial exposure is <strong>${fa.sum():,.2f}</strong>."
+            f"total financial exposure is <strong>{fmt_money(fa.sum(),cur)}</strong>."
         )
 
     section("📊 Fraud vs Legitimate", dom)
