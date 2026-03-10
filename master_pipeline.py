@@ -3116,6 +3116,17 @@ def detect_anomalies(df, found, domain):
     severity: 'critical' | 'warning' | 'info'
     """
     anomalies = []
+    # Guard: convert object columns that are actually numeric
+    try:
+        df = df.copy()
+        for col in df.columns:
+            if df[col].dtype == object:
+                converted = pd.to_numeric(df[col], errors="coerce")
+                if converted.notna().mean() > 0.5:
+                    df[col] = converted
+    except Exception:
+        pass
+
     sc   = found.get("sales");   pc  = found.get("profit")
     sal  = found.get("salary");  dc  = found.get("date")
     attr = found.get("attrition"); dept = found.get("department")
@@ -3191,7 +3202,11 @@ def detect_anomalies(df, found, domain):
     for col_key in ["sales","profit","salary","quantity","spend","impressions","clicks"]:
         col = found.get(col_key)
         if col:
-            neg = (df[col] < 0).sum()
+            try:
+                _series = pd.to_numeric(df[col], errors="coerce").dropna()
+                neg = (_series < 0).sum()
+            except Exception:
+                continue
             if neg > 0:
                 anomalies.append({"severity":"warning","icon":"⚠️",
                     "title":f"Negative values in '{col}': {neg:,} rows",
@@ -3199,7 +3214,7 @@ def detect_anomalies(df, found, domain):
 
     # ── 6. Salary anomalies (HR) ──────────────────────────────────────────
     if sal:
-        s = df[sal].dropna()
+        s = pd.to_numeric(df[sal], errors="coerce").dropna()
         if len(s) > 10:
             mean_s = s.mean()
             extreme_high = (s > mean_s * 5).sum()
@@ -4768,8 +4783,7 @@ def render_advanced_dashboard(df, found, domain):
                 marker     = dict(line=dict(width=2, color="#050d1a")),
             )
             fig_tm.update_layout(**cd(360),
-                coloraxis_showscale=False,
-                margin=dict(t=10,b=10,l=10,r=10))
+                coloraxis_showscale=False)
             st.plotly_chart(fig_tm, use_container_width=True)
         else:
             # Numeric columns treemap
@@ -4781,8 +4795,7 @@ def render_advanced_dashboard(df, found, domain):
             fig_tm = px.treemap(tm_data, path=["col"], values="val",
                 color="val", color_continuous_scale=["#0d1829", ac])
             fig_tm.update_traces(textfont=dict(size=12, color="#e2e8f0"))
-            fig_tm.update_layout(**cd(360), coloraxis_showscale=False,
-                margin=dict(t=10,b=10,l=10,r=10))
+            fig_tm.update_layout(**cd(360), coloraxis_showscale=False)
             st.plotly_chart(fig_tm, use_container_width=True)
 
     # ── ROW 4 — Monthly Heatmap ───────────────────────────────────────────
@@ -4814,8 +4827,7 @@ def render_advanced_dashboard(df, found, domain):
                 fig_hm.update_layout(**cd(280),
                     xaxis=dict(tickfont=dict(size=11)),
                     yaxis=dict(tickfont=dict(size=11)),
-                    coloraxis_showscale=False,
-                    margin=dict(t=20,b=20,l=60,r=20))
+                    coloraxis_showscale=False)
                 st.plotly_chart(fig_hm, use_container_width=True)
         except Exception as e:
             st.caption(f"Heatmap skipped: {e}")
