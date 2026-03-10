@@ -4637,7 +4637,7 @@ def render_advanced_dashboard(df, found, domain):
                 },
             }
         ))
-        fig_g1.update_layout(**cd(260), margin=dict(t=40,b=20,l=30,r=30))
+        fig_g1.update_layout(**cd(260))
         st.plotly_chart(fig_g1, use_container_width=True)
 
     with g2:
@@ -4661,7 +4661,7 @@ def render_advanced_dashboard(df, found, domain):
                 ],
             }
         ))
-        fig_g2.update_layout(**cd(260), margin=dict(t=40,b=20,l=30,r=30))
+        fig_g2.update_layout(**cd(260))
         st.plotly_chart(fig_g2, use_container_width=True)
 
     with g3:
@@ -4689,7 +4689,7 @@ def render_advanced_dashboard(df, found, domain):
                 ],
             }
         ))
-        fig_g3.update_layout(**cd(260), margin=dict(t=40,b=20,l=30,r=30))
+        fig_g3.update_layout(**cd(260))
         st.plotly_chart(fig_g3, use_container_width=True)
 
     # ── ROW 3 — Waterfall + Treemap ───────────────────────────────────────
