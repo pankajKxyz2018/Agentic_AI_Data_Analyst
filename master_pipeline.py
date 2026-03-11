@@ -260,100 +260,415 @@ def detect_columns(df):
     found = {}
 
     maps = {
-        "date":        ["order date","order_date","transaction date","sale date","invoice date",
-                        "created date","purchase date","ship date","date","period","order month","month"],
-        "sales":       ["sales","revenue","total revenue","net revenue","gross revenue","total sales",
-                        "net sales","gross sales","sale amount","total price","order value","order total",
-                        "invoice amount","transaction amount","total amount","amount","net amount",
-                        "selling price","sales amount","turnover"],
-        "profit":      ["profit","net profit","gross profit","operating profit","net income",
-                        "earnings","ebit","ebitda","margin amount"],
-        "product":     ["product name","productname","product title","product","item name","item",
-                        "sku","product code","product id","goods","merchandise","article"],
-        "sub_category":["sub category","sub-category","subcategory","product sub category"],
-        "category":    ["category","product category","product group","product type","brand","class","line"],
-        "region":      ["region","territory","area","zone","market","geography",
-                        "sales_region","sales region","district","division","cluster",
-                        "continent","sub_region","sub region"],
-        "city":        ["city","town","municipality"],
-        "state":       ["state","province","county"],
-        "country":     ["country","nation","country name"],
-        "quantity":    ["quantity","qty","units sold","quantity sold","quantity ordered","units",
-                        "order qty","items sold","volume","no of units","number of units"],
-        "customer":    ["customer name","customer id","customerid","customer","client name","client id",
-                        "client","buyer","consumer","account","user"],
-        "employee_id": ["employee id","emp id","employee_id","emp_id","staff id","worker id","empid"],
-        "employee_name":["employee name","emp name","staff name","worker name","full name","name"],
-        "salary":      ["salary","annual salary","monthly salary","base salary","wage","compensation",
-                        "pay","ctc","total compensation","gross salary","net salary","income"],
-        "department":  ["department","dept","division","team","function","business unit","org unit"],
-        "gender":      ["gender","sex","employee gender"],
-        "age":         ["age","employee age"],
-        "age_group":   ["age group","age band","age bracket","age range"],
-        "tenure":      ["tenure","years of service","experience","years at company","seniority",
-                        "service years","employment duration","years in company",
-                        "yearsatcompany","years_at_company","total working years",
-                        "totalworkingyears","years_in_current_role","yearsinrole"],
-        "hire_date":   ["hire date","joining date","start date","date of joining","doj","date joined",
-                        "employment date","onboard date"],
-        "attrition":   ["attrition","left company","churn","resigned","turnover","exit",
-                        "is churned","employee status","employment status","status","left",
-                        "voluntary_termination","is_active","active_status","separation"],
-        "job_title":   ["job title","designation","position","role","job role","title","job level",
-                        "jobrole","joblevel","job_level","job_role","grade","band","pay_grade"],
-        "performance": ["performance","performance rating","perf rating","rating","appraisal",
-                        "performance score","review score"],
-        "education":   ["education","qualification","degree","education level"],
-        "marital":     ["marital status","marital","relationship status"],
-        "spend":       ["ad spend","marketing spend","campaign cost","ad cost","media spend",
-                        "advertising spend","spend","marketing budget"],
-        "revenue":     ["revenue","campaign revenue","total revenue","net revenue","gross revenue"],
-        "campaign_id": ["campaign","campaign id","campaign_id","campaignid","campaign name",
-                        "campaign_name","ad name","ad_name"],
-        "demography":  ["demography","demographic","age group","age_group","audience","target audience",
-                        "age band","age_band"],
-        "channel":     ["marketing channel","ad channel","traffic source","utm source",
-                        "campaign type","acquisition channel","ad platform","media channel"],
-        "distribution_channel":["channel","distribution channel","sales channel","order channel"],
-        "discount":    ["discount","discount amount","discount %","discount percent",
-                        "promo","rebate","coupon","markdown"],
-        "returns":     ["return status","returned","return","returns","refund","refunded","is returned"],
-        "delivery":    ["delivery time","shipping days","days to ship","lead time",
-                        "fulfillment time","days to deliver","shipping time","transit days"],
-        "payment":     ["payment method","payment type","payment mode","pay method","mode of payment"],
-        "store":       ["store name","store id","store","branch","outlet","shop","point of sale","pos"],
-        "satisfaction":["satisfaction score","satisfaction","nps","csat","review score",
-                        "feedback score","star rating","rating score"],
-        "impressions": ["impressions","impression","views","reach","page views"],
-        "clicks":      ["clicks","click","click through","link clicks"],
-        "conversions": ["conversions","conversion","leads","sign ups","signups","purchases","goals"],
-        "roi":         ["roi","roas","return on investment","return on ad spend"],
-        "price":       ["unit price","selling price","list price","mrp","price","rate","retail price"],
-        "cost":        ["unit cost","cost of goods","cogs","purchase price","product cost","cost"],
-        "order_id":    ["order id","order no","orderid","transaction id","invoice id","order number",
-                        "purchase id","booking id","reference no","ref no","confirmation number"],
-        "return_reason":["return reason","reason for return","refund reason","cancellation reason"],
-        "shipping_country":["shipping country","ship to country","delivery country","destination country"],
-        "loyalty_points":["loyalty points","reward points","points earned","points balance","miles"],
-        "device":       ["device","device type","platform","os","browser","user agent","channel device"],
-        "ship_mode":   ["ship mode","shipping mode","delivery mode","shipment type","ship method"],
-        "segment":     ["customer segment","market segment","customer type","business segment"],
-        # ── Fraud ────────────────────────────────────────────────────────
+        # ── DATE / TIME ─────────────────────────────────────────────────────
+        "date":         ["date","order date","order_date","transaction date","transaction_date",
+                         "sale date","sale_date","invoice date","invoice_date","created date",
+                         "created_date","purchase date","purchase_date","ship date","ship_date",
+                         "billing date","billing_date","posting date","posting_date","value date",
+                         "booking date","booking_date","record date","entry date","voucher date",
+                         "docket date","dated","period","month","year","week","quarter","fy",
+                         "financial year","fiscal year","fiscal_year","reporting date","trade date",
+                         "settlement date","maturity date","as of date","as_of_date","reporting_period",
+                         "time","timestamp","created_at","updated_at","modified_date","event_date"],
+
+        # ── SALES / REVENUE ─────────────────────────────────────────────────
+        "sales":        ["sales","revenue","total revenue","net revenue","gross revenue","total sales",
+                         "net sales","gross sales","sale amount","total price","order value","order total",
+                         "invoice amount","total amount","net amount","selling price","sales amount",
+                         "turnover","gross turnover","net turnover","billed amount","billing amount",
+                         "collection","receipts","income","gross income","net income","top line",
+                         "topline","sales value","sale value","sold amount","transaction value",
+                         "transaction amount","txn amount","txn_amount","value","amount","amt",
+                         "extended price","ext price","line total","subtotal","sub total",
+                         "sale_value","revenue_amount","rev_amount","rev amount","total_revenue",
+                         "net_revenue","gross_revenue","total_sales","net_sales","gross_sales",
+                         "umsatz","chiffre affaires","fatturato","facturacion","omzet",
+                         "विक्रय","매출","売上","营业额","राजस्व"],
+
+        # ── PROFIT / MARGIN ─────────────────────────────────────────────────
+        "profit":       ["profit","net profit","gross profit","operating profit","net income",
+                         "earnings","ebit","ebitda","margin amount","profit amount","profit value",
+                         "contribution","contribution margin","gross margin","operating income",
+                         "profit_amount","profit_value","net_profit","gross_profit","op_profit",
+                         "pbt","pat","profit before tax","profit after tax","bottom line","surplus",
+                         "gain","gewinn","benefice","profitto","ganancia","winst","लाभ","利润","이익"],
+
+        # ── QUANTITY / UNITS ─────────────────────────────────────────────────
+        "quantity":     ["quantity","qty","units sold","quantity sold","quantity ordered","units",
+                         "order qty","items sold","volume","no of units","number of units","nos",
+                         "pieces","pcs","count","sold qty","sales qty","dispatch qty","shipped qty",
+                         "ordered qty","fulfilled qty","delivered qty","units_sold","qty_sold",
+                         "no_of_units","number_of_units","menge","quantite","quantita","cantidad",
+                         "hoeveelheid","संख्या","수량","数量"],
+
+        # ── DISCOUNT ─────────────────────────────────────────────────────────
+        "discount":     ["discount","discount amount","discount %","discount percent","discount_amount",
+                         "discount_pct","discount_percent","promo","rebate","coupon","markdown",
+                         "allowance","trade discount","cash discount","promotional discount",
+                         "offer amount","scheme amount","deduction","concession","reduction",
+                         "rabatt","remise","sconto","descuento","korting","छूट","할인","折扣"],
+
+        # ── UNIT PRICE ───────────────────────────────────────────────────────
+        "price":        ["unit price","selling price","list price","mrp","price","rate","retail price",
+                         "sale price","market price","sp","basic price","base price","standard price",
+                         "unit_price","selling_price","list_price","retail_price","base_price",
+                         "unit cost price","per unit price","item price","product price","price per unit",
+                         "preis","prix","prezzo","precio","prijs","मूल्य","가격","价格"],
+
+        # ── UNIT COST / COGS ─────────────────────────────────────────────────
+        "cost":         ["unit cost","cost of goods","cogs","purchase price","product cost","cost",
+                         "landed cost","standard cost","average cost","weighted avg cost","wac",
+                         "procurement cost","buying price","material cost","variable cost",
+                         "cost_of_goods","purchase_price","product_cost","unit_cost","cost_price",
+                         "buying_price","kosten","cout","costo","coste","kosten","लागत","원가","成本"],
+
+        # ── TARGET / BUDGET / FORECAST ───────────────────────────────────────
+        "target":       ["target","budget","forecast","plan","planned","projected","estimated",
+                         "quota","goal","aim","objective","target_amount","budget_amount",
+                         "sales_target","revenue_target","sales_budget","rev_budget","projection",
+                         "guidance","expected","annual_plan","monthly_plan","ziel","cible","목표","目标"],
+
+        # ── PRODUCT ──────────────────────────────────────────────────────────
+        "product":      ["product name","productname","product title","product","item name","item",
+                         "sku","product code","product id","goods","merchandise","article","material",
+                         "item_name","item_description","product_description","description","desc",
+                         "part name","part number","part_name","part_no","component","model name",
+                         "model number","model_name","model_no","service name","service_name",
+                         "produkt","produit","prodotto","producto","产品","제품","उत्पाद"],
+
+        # ── CATEGORY ─────────────────────────────────────────────────────────
+        "category":     ["category","product category","product group","product type","brand",
+                         "line","item category","item group","item type","commodity","commodity group",
+                         "category_name","product_category","product_group","item_category",
+                         "product_line","segment","business segment","division","class","classification",
+                         "department","dept","family","range","collection","vertikale","катэгорыя",
+                         "kategorie","categorie","categoria","श्रेणी","범주","类别"],
+
+        # ── SUB CATEGORY ─────────────────────────────────────────────────────
+        "sub_category": ["sub category","sub-category","subcategory","product sub category",
+                         "sub_category","sub_cat","subcat","item sub category","item_sub_category",
+                         "sub group","subgroup","product subfamily","sub type","sub_type","sub class",
+                         "minor category","secondary category","level 2 category","l2_category"],
+
+        # ── REGION / TERRITORY ───────────────────────────────────────────────
+        "region":       ["region","territory","area","zone","market","geography","sales_region",
+                         "sales region","district","division","cluster","continent","sub_region",
+                         "sub region","sales territory","sales zone","sales area","coverage area",
+                         "business region","geo","location region","region_name","territory_name",
+                         "north","south","east","west","north india","south india","apac","emea",
+                         "americas","latam","mea","region_code","sales_zone","trade_area",
+                         "gebiet","territoire","territorio","地区","지역","क्षेत्र"],
+
+        # ── CITY ─────────────────────────────────────────────────────────────
+        "city":         ["city","town","municipality","city name","city_name","ship city","bill city",
+                         "delivery city","customer city","billing city","shipping city","location",
+                         "place","locality","urban area","metro","ville","ciudad","città","stad",
+                         "शहर","도시","城市"],
+
+        # ── STATE / PROVINCE ─────────────────────────────────────────────────
+        "state":        ["state","province","county","state name","state_name","ship state",
+                         "billing state","customer state","delivery state","prefecture","oblast",
+                         "canton","land","bundesland","departement","provincia","provincie",
+                         "राज्य","주","省"],
+
+        # ── COUNTRY ──────────────────────────────────────────────────────────
+        "country":      ["country","nation","country name","country_name","ship country",
+                         "billing country","customer country","delivery country","destination",
+                         "origin country","market country","country_code","iso_country","iso2",
+                         "iso3","land","pays","paese","pais","देश","국가","国家"],
+
+        # ── POSTAL CODE ──────────────────────────────────────────────────────
+        "postal_code":  ["postal code","postcode","zip code","zip","pin code","pincode","pin",
+                         "postal_code","post_code","zip_code","pin_code","area code","plz",
+                         "code postal","codice postale","codigo postal","postcode"],
+
+        # ── CUSTOMER ─────────────────────────────────────────────────────────
+        "customer":     ["customer name","customer id","customerid","customer","client name","client id",
+                         "client","buyer","consumer","account","user","customer_name","customer_id",
+                         "client_name","client_id","account_name","account_id","party name","party",
+                         "sold to","sold_to","bill to","bill_to","debtor","purchaser","end customer",
+                         "retailer","dealer","distributor","partner","contact name","customer_code",
+                         "cust_id","cust_name","acc_name","ग्राहक","고객","客户"],
+
+        # ── CUSTOMER SEGMENT ─────────────────────────────────────────────────
+        "segment":      ["customer segment","market segment","customer type","business segment",
+                         "segment","tier","customer tier","account type","customer_segment",
+                         "customer_type","market_segment","business_type","channel_type","b2b","b2c",
+                         "consumer type","buyer type","priority","classification","grade","abc class"],
+
+        # ── ORDER ID ─────────────────────────────────────────────────────────
+        "order_id":     ["order id","order no","orderid","transaction id","invoice id","order number",
+                         "purchase id","booking id","reference no","ref no","confirmation number",
+                         "order_id","order_no","transaction_id","invoice_id","order_number",
+                         "purchase_order","po number","po no","po_number","po_no","so number",
+                         "so no","sales order","bill number","bill no","bill_number","voucher no",
+                         "voucher number","docket no","ref_id","txn_id","receipt_no","document_no"],
+
+        # ── SHIPPING MODE ────────────────────────────────────────────────────
+        "ship_mode":    ["ship mode","shipping mode","delivery mode","shipment type","ship method",
+                         "shipping_mode","ship_mode","delivery_type","dispatch_mode","courier",
+                         "carrier","logistics","transport mode","freight type","express","standard"],
+
+        # ── SALESPERSON / REP ────────────────────────────────────────────────
+        "sales_rep":    ["sales rep","salesperson","sales person","account manager","am",
+                         "sales executive","se","sales officer","so","sales manager","sm",
+                         "rep name","rep id","agent","agent name","broker","field rep",
+                         "sales_rep","sales_person","account_manager","sales_executive",
+                         "territory manager","territory_manager","relationship manager","rm"],
+
+        # ── EMPLOYEE ID ──────────────────────────────────────────────────────
+        "employee_id":  ["employee id","emp id","employee_id","emp_id","staff id","worker id",
+                         "empid","employee number","emp number","emp_no","employee_no","staff_id",
+                         "worker_id","personnel_id","personnel id","associate id","associate_id",
+                         "badge number","badge_no","payroll id","payroll_id","hr id","hr_id"],
+
+        # ── EMPLOYEE NAME ─────────────────────────────────────────────────────
+        "employee_name":["employee name","emp name","staff name","worker name","full name","name",
+                         "employee_name","emp_name","staff_name","worker_name","full_name",
+                         "first name","last name","associate name","associate_name","personnel name",
+                         "team member","resource name","resource_name","consultant name"],
+
+        # ── SALARY ───────────────────────────────────────────────────────────
+        "salary":       ["salary","annual salary","monthly salary","base salary","wage","compensation",
+                         "pay","ctc","total compensation","gross salary","net salary","income",
+                         "remuneration","emoluments","fixed pay","basic pay","basic salary",
+                         "total pay","total salary","salary_amount","compensation_amount","ctc_amount",
+                         "gross_salary","net_salary","base_pay","annual_ctc","monthly_ctc",
+                         "earnings","take home","in hand","gehalt","salaire","stipendio","salario",
+                         "वेतन","급여","薪资"],
+
+        # ── DEPARTMENT ───────────────────────────────────────────────────────
+        "department":   ["department","dept","division","team","function","business unit","org unit",
+                         "department_name","dept_name","business_unit","cost centre","cost center",
+                         "cc","profit centre","profit center","sub department","sub_department",
+                         "group","section","branch","unit","abteilung","departement","dipartimento",
+                         "विभाग","부서","部门"],
+
+        # ── GENDER ───────────────────────────────────────────────────────────
+        "gender":       ["gender","sex","employee gender","gender_code","gender_type","male female",
+                         "m f","geschlecht","genre","genere","genero","लिंग","성별","性别"],
+
+        # ── AGE ──────────────────────────────────────────────────────────────
+        "age":          ["age","employee age","age_years","age in years","years old","worker age",
+                         "alter","age_band","age_bucket","आयु","나이","年龄"],
+
+        # ── AGE GROUP ────────────────────────────────────────────────────────
+        "age_group":    ["age group","age band","age bracket","age range","age_group","age_band",
+                         "age_bracket","age_range","age bucket","age_bucket","age category",
+                         "generation","gen z","millennial","boomer","cohort"],
+
+        # ── TENURE ───────────────────────────────────────────────────────────
+        "tenure":       ["tenure","years of service","experience","years at company","seniority",
+                         "service years","employment duration","years in company","yearsatcompany",
+                         "years_at_company","total working years","totalworkingyears","yrs_experience",
+                         "years_in_current_role","yearsinrole","years_with_company","service_length",
+                         "employment_duration","months_of_service","length_of_service","los",
+                         "experience_years","work_experience","total_experience","exp_years"],
+
+        # ── ATTRITION / CHURN ────────────────────────────────────────────────
+        "attrition":    ["attrition","left company","churn","resigned","turnover","exit","is churned",
+                         "employee status","employment status","status","left","voluntary_termination",
+                         "is_active","active_status","separation","termination","resigned_flag",
+                         "attrition_flag","churn_flag","exit_flag","active","inactive","left_flag",
+                         "still_employed","employed","separation_type","resignation"],
+
+        # ── JOB TITLE ────────────────────────────────────────────────────────
+        "job_title":    ["job title","designation","position","role","job role","title","job level",
+                         "jobrole","joblevel","job_level","job_role","grade","band","pay_grade",
+                         "job_title","job_designation","work_title","position_title","employee_role",
+                         "function_title","work_level","career_level","level","rank","cadre",
+                         "post","designation_name","role_name","profile"],
+
+        # ── HIRE DATE ────────────────────────────────────────────────────────
+        "hire_date":    ["hire date","joining date","start date","date of joining","doj","date joined",
+                         "employment date","onboard date","hire_date","joining_date","start_date",
+                         "date_of_joining","date_of_hire","joining_dt","doj","joining_month",
+                         "employment_start","commencement_date","effective_date","date_of_appointment"],
+
+        # ── PERFORMANCE ──────────────────────────────────────────────────────
+        "performance":  ["performance","performance rating","perf rating","rating","appraisal",
+                         "performance score","review score","performance_rating","perf_rating",
+                         "performance_score","annual_rating","kra_score","kpi_score","gor_score",
+                         "review_rating","goal_rating","competency_score","overall_rating",
+                         "performance_band","performance_grade","bell_curve"],
+
+        # ── EDUCATION ────────────────────────────────────────────────────────
+        "education":    ["education","qualification","degree","education level","education_level",
+                         "education_qualification","highest_qualification","academic_qualification",
+                         "highest_education","degree_type","field_of_study","major","discipline",
+                         "course","stream","specialization","educational_background"],
+
+        # ── MARITAL STATUS ───────────────────────────────────────────────────
+        "marital":      ["marital status","marital","relationship status","married","single",
+                         "marital_status","family_status","civil_status","matrimonial_status"],
+
+        # ── AD SPEND ─────────────────────────────────────────────────────────
+        "spend":        ["ad spend","marketing spend","campaign cost","ad cost","media spend",
+                         "advertising spend","spend","marketing budget","ad_spend","media_cost",
+                         "advertising_cost","marketing_cost","campaign_spend","paid_spend",
+                         "digital_spend","media_budget","total_spend","cost_incurred","expenditure",
+                         "marketing_expenditure","ad_expenditure","media_expenditure","budget_spent",
+                         "amount_spent","kosten","depense","spesa","gasto","उपभोग","지출","支出"],
+
+        # ── CAMPAIGN REVENUE ─────────────────────────────────────────────────
+        "revenue":      ["revenue","campaign revenue","total revenue","net revenue","gross revenue",
+                         "attributed_revenue","marketing_revenue","campaign_value","revenue_generated",
+                         "attributed_sales","influenced_revenue","pipeline_value"],
+
+        # ── CAMPAIGN ID / NAME ───────────────────────────────────────────────
+        "campaign_id":  ["campaign","campaign id","campaign_id","campaignid","campaign name",
+                         "campaign_name","ad name","ad_name","ad campaign","ad_campaign",
+                         "campaign_title","promo_name","promotion_name","promotion_id","promo_id",
+                         "initiative","program_name","initiative_name","scheme_name","offer_name"],
+
+        # ── DEMOGRAPHY ───────────────────────────────────────────────────────
+        "demography":   ["demography","demographic","age group","age_group","audience","target audience",
+                         "target_audience","age band","age_band","audience_segment","audience_type",
+                         "profile","customer_profile","audience_age","demographic_segment","user_segment",
+                         "demo","target_demo","target_group","demographic_group","cohort"],
+
+        # ── MARKETING CHANNEL ────────────────────────────────────────────────
+        "channel":      ["marketing channel","ad channel","traffic source","utm source","utm_source",
+                         "campaign type","acquisition channel","ad platform","media channel",
+                         "channel","medium","source","utm_medium","utm_campaign","platform",
+                         "channel_name","media_type","ad_type","campaign_channel","ad_channel",
+                         "digital_channel","organic","paid","social","email","search","display",
+                         "affiliate","referral","direct","seo","sem","ppc","social_media"],
+
+        # ── IMPRESSIONS / VIEWS ──────────────────────────────────────────────
+        "impressions":  ["impressions","impression","views","reach","page views","pageviews",
+                         "ad views","ad_impressions","total_impressions","total_views","exposures",
+                         "served","ad_served","total_reach","gross_impressions","unique_reach"],
+
+        # ── CLICKS ───────────────────────────────────────────────────────────
+        "clicks":       ["clicks","click","click through","link clicks","total clicks","ad clicks",
+                         "link_clicks","total_clicks","ad_clicks","ctr_clicks","visits","sessions",
+                         "unique_clicks","paid_clicks","organic_clicks"],
+
+        # ── CONVERSIONS / LEADS ──────────────────────────────────────────────
+        "conversions":  ["conversions","conversion","leads","sign ups","signups","purchases","goals",
+                         "total_conversions","lead_count","leads_generated","form_fills","inquiries",
+                         "enquiries","responses","downloads","installs","activations","trials",
+                         "registrations","bookings","orders","acquisitions","new_customers"],
+
+        # ── ROI / ROAS ───────────────────────────────────────────────────────
+        "roi":          ["roi","roas","return on investment","return on ad spend","marketing_roi",
+                         "campaign_roi","ad_roi","roi_percent","roas_value","efficiency",
+                         "revenue_per_cost","revenue_to_cost","return_multiple"],
+
+        # ── CTR ──────────────────────────────────────────────────────────────
+        "ctr":          ["ctr","click through rate","click_through_rate","click_rate","ad_ctr",
+                         "engagement_rate","interaction_rate","response_rate"],
+
+        # ── DISTRIBUTION CHANNEL ─────────────────────────────────────────────
+        "distribution_channel": ["distribution channel","sales channel","order channel",
+                         "distribution_channel","sales_channel","order_channel","booking_channel",
+                         "fulfillment_channel","purchase_channel","buying_channel"],
+
+        # ── STORE / BRANCH ───────────────────────────────────────────────────
+        "store":        ["store name","store id","store","branch","outlet","shop","point of sale",
+                         "pos","store_name","store_id","branch_name","branch_id","outlet_name",
+                         "outlet_id","shop_name","location_name","site","site_name","site_id",
+                         "venue","kiosk","showroom","retail_location","store_code","branch_code"],
+
+        # ── PAYMENT METHOD ───────────────────────────────────────────────────
+        "payment":      ["payment method","payment type","payment mode","pay method","mode of payment",
+                         "payment_method","payment_type","payment_mode","tender_type","tender",
+                         "mop","mode","settlement_mode","transaction_mode","pay_type","pay_mode",
+                         "instrument","card type","card_type","upi","neft","rtgs","cheque","cash",
+                         "credit card","debit card","net banking","wallet","cod"],
+
+        # ── DELIVERY / SHIPPING TIME ─────────────────────────────────────────
+        "delivery":     ["delivery time","shipping days","days to ship","lead time","fulfillment time",
+                         "days to deliver","shipping time","transit days","delivery_time","ship_days",
+                         "lead_time","delivery_days","tat","turnaround","turnaround_time","sla",
+                         "time_to_deliver","dispatch_time","processing_time","handling_time"],
+
+        # ── RETURNS / REFUNDS ────────────────────────────────────────────────
+        "returns":      ["return status","returned","return","returns","refund","refunded","is returned",
+                         "return_status","return_flag","refund_status","is_returned","rma",
+                         "return_reason","return_type","reversal","cancellation","cancelled",
+                         "chargeback","return_amount","refund_amount","reverse","recall"],
+
+        # ── SATISFACTION / RATING ────────────────────────────────────────────
+        "satisfaction": ["satisfaction score","satisfaction","nps","csat","review score","feedback score",
+                         "star rating","rating score","satisfaction_score","customer_satisfaction",
+                         "nps_score","csat_score","review_rating","feedback_rating","rating",
+                         "score","stars","review","customer_rating","survey_score","happiness_index",
+                         "loyalty_score","net_promoter","promoter_score","detractor_score"],
+
+        # ── LOYALTY POINTS ───────────────────────────────────────────────────
+        "loyalty_points":["loyalty points","reward points","points earned","points balance","miles",
+                         "loyalty_points","reward_points","points_earned","points_balance","cashback",
+                         "bonus points","redeem points","membership points","tier_points"],
+
+        # ── DEVICE / PLATFORM ────────────────────────────────────────────────
+        "device":       ["device","device type","platform","os","browser","user agent","channel device",
+                         "device_type","mobile","desktop","tablet","app","web","app_type",
+                         "access_channel","access_device","user_device","screen_type"],
+
+        # ── RETURN REASON ────────────────────────────────────────────────────
+        "return_reason":["return reason","reason for return","refund reason","cancellation reason",
+                         "return_reason","refund_reason","cancellation_reason","reason_for_cancellation",
+                         "return_category","defect_type","complaint_reason"],
+
+        # ── SHIPPING COUNTRY ─────────────────────────────────────────────────
+        "shipping_country":["shipping country","ship to country","delivery country","destination country",
+                         "shipping_country","ship_to_country","delivery_country","destination_country",
+                         "consignee_country","recipient_country","to_country"],
+
+        # ── VENDOR / SUPPLIER ────────────────────────────────────────────────
+        "vendor":       ["vendor","supplier","vendor name","supplier name","vendor_name","supplier_name",
+                         "vendor_id","supplier_id","manufacturer","oem","brand owner","principal",
+                         "source","source_name","distributor","wholesaler","trader","importer"],
+
+        # ── FRAUD LABEL ──────────────────────────────────────────────────────
         "fraud_label":  ["class","label","fraud","is_fraud","isfraud","fraud_flag","fraudulent",
                          "is_fraudulent","fraud_ind","fraud_indicator","suspicious","anomaly",
-                         "flagged","target","is fraud","fraud_label","label_class"],
+                         "flagged","target","is fraud","fraud_label","label_class","isFraud",
+                         "is_suspicious","risk_flag","alert_flag","exception_flag"],
+
+        # ── FRAUD AMOUNT ─────────────────────────────────────────────────────
         "fraud_amount": ["transaction amount","trans amount","amount","step_amount","transaction value",
-                         "trans_amount","oldbalanceorg","newbalanceorig"],
+                         "trans_amount","oldbalanceorg","newbalanceorig","txn_amount","payment_amount",
+                         "transfer_amount","withdraw_amount","deposit_amount","debit_amount","credit_amount"],
+
+        # ── FRAUD TIME ───────────────────────────────────────────────────────
         "fraud_time":   ["step","time","timestamp","transaction time","trans_time","transaction_date",
-                         "trans_date"],
+                         "trans_date","txn_time","txn_date","event_time","event_timestamp",
+                         "occurrence_time","detection_time"],
+
+        # ── FRAUD TYPE ───────────────────────────────────────────────────────
         "fraud_type":   ["type","transaction type","trans_type","payment_type","fraud_type",
-                         "transaction_type","nameorig","namedest"],
-        "fraud_id":     ["transaction id","trans_id","transactionid","nameorig","step"],
-        "fraud_channel":["channel","device","medium","source","origin","fraud_channel"],
+                         "transaction_type","nameorig","namedest","transfer_type","txn_type",
+                         "fraud_category","fraud_method","scheme_type","modus_operandi"],
+
+        # ── FRAUD ID ─────────────────────────────────────────────────────────
+        "fraud_id":     ["transaction id","trans_id","transactionid","nameorig","step","txn_id",
+                         "case_id","alert_id","incident_id","reference_id","fraud_case_id"],
+
+        # ── FRAUD CHANNEL ────────────────────────────────────────────────────
+        "fraud_channel":["channel","device","medium","source","origin","fraud_channel","access_channel",
+                         "entry_point","channel_type","atm","pos","online","mobile_banking","branch"],
+
+        # ── FRAUD LOCATION ───────────────────────────────────────────────────
         "fraud_loc":    ["merchant","location","terminal","merchant_name","merchant_category",
-                         "merchant_city","merchant_state"],
+                         "merchant_city","merchant_state","merchant_country","mcc","merchant_id",
+                         "terminal_id","pos_location","atm_location","ip_address","geo_location"],
+
+        # ── FRAUD SCORE ──────────────────────────────────────────────────────
         "fraud_score":  ["fraud_score","risk_score","anomaly_score","score","confidence",
-                         "probability","pred_proba","risk"],
+                         "probability","pred_proba","risk","risk_rating","threat_score",
+                         "suspicion_score","ml_score","model_score","detection_score"],
+
+        # ── ACCOUNT BALANCE ──────────────────────────────────────────────────
+        "balance":      ["balance","account balance","old balance","new balance","closing balance",
+                         "opening balance","oldbalanceorig","newbalanceorig","oldbalancedest",
+                         "newbalancedest","available_balance","ledger_balance","current_balance"],
+
+        # ── LATITUDE / LONGITUDE (Geospatial) ───────────────────────────────
+        "latitude":     ["latitude","lat","lat_coordinate","y_coordinate","geo_lat"],
+        "longitude":    ["longitude","lon","lng","long","lon_coordinate","x_coordinate","geo_lon"],
     }
 
     # Pass 1: exact match
@@ -466,13 +781,16 @@ def detect_domain(df, found):
     h = " ".join(df.columns).lower()
     scores = {"Sales":0,"Marketing":0,"HR":0,"Ecommerce":0,"Retail":0}
 
-    if "sales"    in keys: scores["Sales"]+=3
-    if "profit"   in keys: scores["Sales"]+=3
-    if "product"  in keys: scores["Sales"]+=2
-    if "quantity" in keys: scores["Sales"]+=2
-    if "discount" in keys: scores["Sales"]+=1
-    if "customer" in keys: scores["Sales"]+=1
-    if any(k in h for k in ["order","invoice","sales","revenue","profit"]): scores["Sales"]+=2
+    if "sales"     in keys: scores["Sales"]+=3
+    if "profit"    in keys: scores["Sales"]+=3
+    if "product"   in keys: scores["Sales"]+=2
+    if "quantity"  in keys: scores["Sales"]+=2
+    if "discount"  in keys: scores["Sales"]+=1
+    if "customer"  in keys: scores["Sales"]+=1
+    if "target"    in keys: scores["Sales"]+=1
+    if "sales_rep" in keys: scores["Sales"]+=2
+    if "vendor"    in keys: scores["Sales"]+=1
+    if any(k in h for k in ["order","invoice","sales","revenue","profit","quota","forecast"]): scores["Sales"]+=2
 
     if "impressions"  in keys: scores["Marketing"]+=5; scores["Sales"]-=3
     if "clicks"       in keys: scores["Marketing"]+=5; scores["Sales"]-=3
@@ -3833,6 +4151,11 @@ def render_prediction(df, found, domain):
         if any(k in col.lower() for k in ["id","name","email","phone","address","index"]):
             auto_exclude.add(col)
 
+    # Also exclude datetime columns from defaults — they can't be used directly
+    for col in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            auto_exclude.add(col)
+
     default_features = [c for c in df.columns
                         if c not in exclude_always and c not in auto_exclude][:20]
 
@@ -3880,13 +4203,29 @@ def render_prediction(df, found, domain):
 
             df_model = df_model.dropna(subset=[target_col])
 
-            # Encode categorical features
+            # Encode categorical features + convert datetime cols to ordinal ints
             le_dict = {}
+            drop_cols = []
             for col in feature_cols:
-                if df_model[col].dtype == object or df_model[col].dtype.name == "category":
+                if pd.api.types.is_datetime64_any_dtype(df_model[col]):
+                    # Convert datetime → integer ordinal (days since epoch)
+                    try:
+                        df_model[col] = df_model[col].astype("int64") // 10**9  # unix seconds
+                    except Exception:
+                        drop_cols.append(col)  # can't convert — drop it
+                elif df_model[col].dtype == object or df_model[col].dtype.name == "category":
                     le = LabelEncoder()
                     df_model[col] = le.fit_transform(df_model[col].astype(str).fillna("Unknown"))
                     le_dict[col] = le
+
+            # Drop any unconvertible cols and warn user
+            if drop_cols:
+                st.warning(f"⚠️ Skipped columns (cannot convert to numeric): {', '.join(drop_cols)}")
+                feature_cols = [c for c in feature_cols if c not in drop_cols]
+
+            if not feature_cols:
+                st.error("No usable feature columns after encoding. Please select numeric or categorical columns.")
+                return
 
             X = df_model[feature_cols]
             y = df_model[target_col]
@@ -3904,8 +4243,14 @@ def render_prediction(df, found, domain):
                 stratify=y if is_classification and y.nunique() <= 10 else None)
 
             def train_and_score(model_class_clf, model_class_reg, name):
+                # n_jobs only supported by RandomForest, not GradientBoosting
+                supports_njobs = "RandomForest" in model_class_clf.__name__
+                kwargs = {"n_estimators": 100, "random_state": 42}
+                if supports_njobs:
+                    kwargs["n_jobs"] = -1
+
                 if is_classification:
-                    model = model_class_clf(n_estimators=100, random_state=42, n_jobs=-1)
+                    model = model_class_clf(**kwargs)
                     model.fit(X_train, y_train)
                     y_pred = model.predict(X_test)
                     y_prob = model.predict_proba(X_test)[:,1] if hasattr(model,"predict_proba") else None
@@ -3917,12 +4262,15 @@ def render_prediction(df, found, domain):
                     return model, {"name":name, "accuracy":acc, "auc":auc,
                                    "y_pred":y_pred, "y_test":y_test, "y_prob":y_prob}
                 else:
-                    model = model_class_reg(n_estimators=100, random_state=42, n_jobs=-1)
+                    model = model_class_reg(**kwargs)
                     model.fit(X_train, y_train)
                     y_pred = model.predict(X_test)
                     mae  = mean_absolute_error(y_test, y_pred)
                     r2   = r2_score(y_test, y_pred)
-                    mape = np.mean(np.abs((y_test - y_pred) / (y_test.replace(0, np.nan))) * 100)
+                    # Safe MAPE — y_test is numpy array, use np.where not .replace()
+                    y_test_safe = np.where(y_test == 0, np.nan, y_test)
+                    mape_vals   = np.abs((y_test - y_pred) / y_test_safe) * 100
+                    mape        = float(np.nanmean(mape_vals)) if np.isfinite(mape_vals).any() else 0.0
                     return model, {"name":name, "mae":mae, "r2":r2, "mape":mape,
                                    "y_pred":y_pred, "y_test":y_test}
 
@@ -5059,77 +5407,103 @@ def main():
 
         # ── Key catalogue: (label, options, section) ─────────────────────
         KEY_CATALOGUE = {
-            # Sales & Revenue
-            "sales":        ("Revenue / Sales Amount",    num_c, "💼 Sales & Revenue"),
-            "profit":       ("Profit / Net Income",       num_c, "💼 Sales & Revenue"),
-            "quantity":     ("Quantity / Units Sold",     num_c, "💼 Sales & Revenue"),
-            "discount":     ("Discount / Promo Amount",   num_c, "💼 Sales & Revenue"),
-            "price":        ("Unit Price",                num_c, "💼 Sales & Revenue"),
-            "cost":         ("Unit Cost / COGS",          num_c, "💼 Sales & Revenue"),
-            # Dimensions
-            "date":         ("Date / Transaction Date",   dt_c,  "📅 Dimensions"),
-            "product":      ("Product Name",              all_c, "📅 Dimensions"),
-            "category":     ("Category / Product Group",  all_c, "📅 Dimensions"),
-            "sub_category": ("Sub-Category",              all_c, "📅 Dimensions"),
-            "region":       ("Region / Territory",        all_c, "📅 Dimensions"),
-            "city":         ("City",                      all_c, "📅 Dimensions"),
-            "state":        ("State / Province",          all_c, "📅 Dimensions"),
-            "country":      ("Country",                   all_c, "📅 Dimensions"),
-            "customer":     ("Customer Name / ID",        all_c, "📅 Dimensions"),
-            "segment":      ("Customer Segment",          all_c, "📅 Dimensions"),
-            "ship_mode":    ("Shipping Mode",             all_c, "📅 Dimensions"),
-            "order_id":     ("Order ID",                  all_c, "📅 Dimensions"),
-            # HR
-            "salary":       ("Salary / Compensation",     num_c, "👥 HR"),
-            "department":   ("Department / Division",     all_c, "👥 HR"),
-            "gender":       ("Gender",                    all_c, "👥 HR"),
-            "age":          ("Age",                       num_c, "👥 HR"),
-            "age_group":    ("Age Group / Band",          all_c, "👥 HR"),
-            "tenure":       ("Tenure / Years of Service", num_c, "👥 HR"),
-            "attrition":    ("Attrition / Left Company",  all_c, "👥 HR"),
-            "job_title":    ("Job Title / Designation",   all_c, "👥 HR"),
-            "hire_date":    ("Hire / Joining Date",       dt_c,  "👥 HR"),
-            "performance":  ("Performance Rating",        all_c, "👥 HR"),
-            "education":    ("Education Level",           all_c, "👥 HR"),
-            "employee_id":  ("Employee ID",               all_c, "👥 HR"),
-            "employee_name":("Employee Name",             all_c, "👥 HR"),
-            # Marketing
-            "spend":        ("Ad Spend / Marketing Cost", num_c, "📣 Marketing"),
-            "revenue":      ("Campaign Revenue",          num_c, "📣 Marketing"),
-            "channel":      ("Marketing Channel",         all_c, "📣 Marketing"),
-            "impressions":  ("Impressions / Views",       num_c, "📣 Marketing"),
-            "clicks":       ("Clicks",                    num_c, "📣 Marketing"),
-            "conversions":  ("Conversions / Leads",       num_c, "📣 Marketing"),
-            "roi":          ("ROI / ROAS",                num_c, "📣 Marketing"),
-            "demography":   ("Demography / Age Group",    all_c, "📣 Marketing"),
-            "campaign_id":  ("Campaign ID",               all_c, "📣 Marketing"),
-            # Retail / Ecommerce
-            "store":        ("Store / Branch Name",       all_c, "🏪 Retail"),
-            "payment":      ("Payment Method",            all_c, "🏪 Retail"),
-            "delivery":     ("Delivery / Shipping Days",  num_c, "🏪 Retail"),
-            "returns":      ("Returns / Refund Status",   all_c, "🏪 Retail"),
-            "satisfaction": ("Satisfaction / Rating",     num_c, "🏪 Retail"),
-            "distribution_channel":("Distribution Channel", all_c, "🏪 Retail"),
-            # Fraud
-            "fraud_label":  ("Fraud Label / Class",       all_c, "🚨 Fraud"),
-            "fraud_amount": ("Transaction Amount",        num_c, "🚨 Fraud"),
-            "fraud_time":   ("Transaction Time / Date",   dt_c,  "🚨 Fraud"),
-            "fraud_type":   ("Transaction / Fraud Type",  all_c, "🚨 Fraud"),
-            "fraud_id":     ("Transaction ID",            all_c, "🚨 Fraud"),
-            "fraud_channel":("Channel / Device",          all_c, "🚨 Fraud"),
-            "fraud_loc":    ("Location / Merchant",       all_c, "🚨 Fraud"),
-            "fraud_score":  ("Risk Score / Anomaly Score",num_c, "🚨 Fraud"),
+            # ══ 💼 SALES & REVENUE ═══════════════════════════════════════════
+            "sales":        ("Revenue / Sales Amount",       num_c, "💼 Sales & Revenue"),
+            "profit":       ("Profit / Net Income",          num_c, "💼 Sales & Revenue"),
+            "quantity":     ("Quantity / Units Sold",        num_c, "💼 Sales & Revenue"),
+            "discount":     ("Discount / Promo Amount",      num_c, "💼 Sales & Revenue"),
+            "price":        ("Unit Price / MRP",             num_c, "💼 Sales & Revenue"),
+            "cost":         ("Unit Cost / COGS",             num_c, "💼 Sales & Revenue"),
+            "target":       ("Target / Budget / Forecast",   num_c, "💼 Sales & Revenue"),
+            "sales_rep":    ("Sales Rep / Account Manager",  all_c, "💼 Sales & Revenue"),
+            "vendor":       ("Vendor / Supplier",            all_c, "💼 Sales & Revenue"),
+
+            # ══ 📅 DIMENSIONS ════════════════════════════════════════════════
+            "date":         ("Date / Transaction Date",      dt_c,  "📅 Dimensions"),
+            "product":      ("Product / Item Name",          all_c, "📅 Dimensions"),
+            "category":     ("Category / Product Group",     all_c, "📅 Dimensions"),
+            "sub_category": ("Sub-Category",                 all_c, "📅 Dimensions"),
+            "region":       ("Region / Territory / Zone",    all_c, "📅 Dimensions"),
+            "city":         ("City / Town",                  all_c, "📅 Dimensions"),
+            "state":        ("State / Province",             all_c, "📅 Dimensions"),
+            "country":      ("Country",                      all_c, "📅 Dimensions"),
+            "postal_code":  ("Postal Code / PIN / ZIP",      all_c, "📅 Dimensions"),
+            "customer":     ("Customer / Client / Account",  all_c, "📅 Dimensions"),
+            "segment":      ("Customer Segment / Tier",      all_c, "📅 Dimensions"),
+            "ship_mode":    ("Shipping Mode / Carrier",      all_c, "📅 Dimensions"),
+            "order_id":     ("Order ID / Invoice / PO No",   all_c, "📅 Dimensions"),
+            "distribution_channel": ("Distribution Channel", all_c, "📅 Dimensions"),
+
+            # ══ 👥 HR ════════════════════════════════════════════════════════
+            "salary":       ("Salary / CTC / Compensation",  num_c, "👥 HR"),
+            "department":   ("Department / Division / BU",   all_c, "👥 HR"),
+            "job_title":    ("Job Title / Designation",      all_c, "👥 HR"),
+            "employee_id":  ("Employee ID / Payroll ID",     all_c, "👥 HR"),
+            "employee_name":("Employee Name",                all_c, "👥 HR"),
+            "gender":       ("Gender",                       all_c, "👥 HR"),
+            "age":          ("Age",                          num_c, "👥 HR"),
+            "age_group":    ("Age Group / Band",             all_c, "👥 HR"),
+            "tenure":       ("Tenure / Years of Service",    num_c, "👥 HR"),
+            "attrition":    ("Attrition / Left Company",     all_c, "👥 HR"),
+            "hire_date":    ("Hire / Joining Date",          dt_c,  "👥 HR"),
+            "performance":  ("Performance Rating",           all_c, "👥 HR"),
+            "education":    ("Education Level",              all_c, "👥 HR"),
+            "marital":      ("Marital Status",               all_c, "👥 HR"),
+
+            # ══ 📣 MARKETING ═════════════════════════════════════════════════
+            "spend":        ("Ad Spend / Marketing Cost",    num_c, "📣 Marketing"),
+            "revenue":      ("Campaign Revenue / Value",     num_c, "📣 Marketing"),
+            "impressions":  ("Impressions / Views / Reach",  num_c, "📣 Marketing"),
+            "clicks":       ("Clicks / Visits",              num_c, "📣 Marketing"),
+            "conversions":  ("Conversions / Leads",          num_c, "📣 Marketing"),
+            "roi":          ("ROI / ROAS",                   num_c, "📣 Marketing"),
+            "ctr":          ("CTR / Click Rate",             num_c, "📣 Marketing"),
+            "channel":      ("Marketing Channel / Platform", all_c, "📣 Marketing"),
+            "campaign_id":  ("Campaign Name / ID",           all_c, "📣 Marketing"),
+            "demography":   ("Demography / Audience Segment",all_c, "📣 Marketing"),
+
+            # ══ 🏪 RETAIL / ECOMMERCE ════════════════════════════════════════
+            "store":          ("Store / Branch / Outlet",      all_c, "🏪 Retail"),
+            "payment":        ("Payment Method / Mode",        all_c, "🏪 Retail"),
+            "delivery":       ("Delivery Time / Lead Time",    num_c, "🏪 Retail"),
+            "returns":        ("Returns / Refund Status",      all_c, "🏪 Retail"),
+            "satisfaction":   ("Satisfaction / NPS / Rating",  num_c, "🏪 Retail"),
+            "loyalty_points": ("Loyalty Points / Rewards",     num_c, "🏪 Retail"),
+            "device":         ("Device / Platform / Channel",  all_c, "🏪 Retail"),
+            "return_reason":  ("Return / Cancellation Reason", all_c, "🏪 Retail"),
+            "shipping_country":("Shipping Country",            all_c, "🏪 Retail"),
+
+            # ══ 🚨 FRAUD ══════════════════════════════════════════════════════
+            "fraud_label":  ("Fraud Label / Class",          all_c, "🚨 Fraud"),
+            "fraud_amount": ("Transaction Amount",           num_c, "🚨 Fraud"),
+            "fraud_time":   ("Transaction Time / Date",      dt_c,  "🚨 Fraud"),
+            "fraud_type":   ("Transaction / Fraud Type",     all_c, "🚨 Fraud"),
+            "fraud_id":     ("Transaction / Case ID",        all_c, "🚨 Fraud"),
+            "fraud_channel":("Channel / Device / Entry",     all_c, "🚨 Fraud"),
+            "fraud_loc":    ("Location / Merchant / MCC",    all_c, "🚨 Fraud"),
+            "fraud_score":  ("Risk / Anomaly Score",         num_c, "🚨 Fraud"),
+            "balance":      ("Account Balance",              num_c, "🚨 Fraud"),
+
+            # ══ 🌍 GEO ════════════════════════════════════════════════════════
+            "latitude":     ("Latitude",                     num_c, "🌍 Geo"),
+            "longitude":    ("Longitude",                    num_c, "🌍 Geo"),
         }
 
         DOMAIN_SECTIONS = {
-            "Sales":     ["💼 Sales & Revenue", "📅 Dimensions"],
-            "Marketing": ["📣 Marketing",        "📅 Dimensions", "💼 Sales & Revenue"],
-            "HR":        ["👥 HR",               "📅 Dimensions"],
-            "Ecommerce": ["💼 Sales & Revenue",  "📅 Dimensions", "🏪 Retail"],
-            "Retail":    ["💼 Sales & Revenue",  "📅 Dimensions", "🏪 Retail"],
-            "Fraud":     ["🚨 Fraud",            "💼 Sales & Revenue", "📅 Dimensions"],
-            "Generic":   ["💼 Sales & Revenue",  "📅 Dimensions", "👥 HR",
-                          "📣 Marketing",        "🏪 Retail"],
+            "Sales":     ["💼 Sales & Revenue", "📅 Dimensions",
+                          "🏪 Retail", "📣 Marketing"],
+            "Marketing": ["📣 Marketing", "📅 Dimensions",
+                          "💼 Sales & Revenue", "🏪 Retail"],
+            "HR":        ["👥 HR", "📅 Dimensions",
+                          "💼 Sales & Revenue"],
+            "Ecommerce": ["💼 Sales & Revenue", "📅 Dimensions",
+                          "🏪 Retail", "📣 Marketing"],
+            "Retail":    ["💼 Sales & Revenue", "📅 Dimensions",
+                          "🏪 Retail", "📣 Marketing"],
+            "Fraud":     ["🚨 Fraud", "📅 Dimensions",
+                          "💼 Sales & Revenue"],
+            "Generic":   ["💼 Sales & Revenue", "📅 Dimensions", "👥 HR",
+                          "📣 Marketing", "🏪 Retail", "🚨 Fraud", "🌍 Geo"],
         }
         active_secs = DOMAIN_SECTIONS.get(domain, list(KEY_CATALOGUE.keys()))
 
