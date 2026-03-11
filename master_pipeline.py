@@ -74,7 +74,7 @@ def parse_dates_robust(series):
     """Parse dates robustly handling DD/MM/YYYY, MM/DD/YYYY, YYYY-MM-DD etc."""
     try:
         # Try standard parse first
-        result = pd.to_datetime(series, errors="coerce", infer_datetime_format=True)
+        result = pd.to_datetime(series, errors="coerce")
         # If >50% failed, try dayfirst (European format)
         if result.isna().mean() > 0.5:
             result = pd.to_datetime(series, errors="coerce", dayfirst=True)
@@ -260,7 +260,7 @@ def detect_columns(df):
     found = {}
 
     maps = {
-        # ── DATE / TIME ─────────────────────────────────────────────────────
+        #  DATE / TIME 
         "date":         ["date","order date","order_date","transaction date","transaction_date",
                          "sale date","sale_date","invoice date","invoice_date","created date",
                          "created_date","purchase date","purchase_date","ship date","ship_date",
@@ -271,7 +271,7 @@ def detect_columns(df):
                          "settlement date","maturity date","as of date","as_of_date","reporting_period",
                          "time","timestamp","created_at","updated_at","modified_date","event_date"],
 
-        # ── SALES / REVENUE ─────────────────────────────────────────────────
+        #  SALES / REVENUE 
         "sales":        ["sales","revenue","total revenue","net revenue","gross revenue","total sales",
                          "net sales","gross sales","sale amount","total price","order value","order total",
                          "invoice amount","total amount","net amount","selling price","sales amount",
@@ -282,121 +282,118 @@ def detect_columns(df):
                          "extended price","ext price","line total","subtotal","sub total",
                          "sale_value","revenue_amount","rev_amount","rev amount","total_revenue",
                          "net_revenue","gross_revenue","total_sales","net_sales","gross_sales",
-                         "umsatz","chiffre affaires","fatturato","facturacion","omzet",
-                         "विक्रय","매출","売上","营业额","राजस्व"],
+                         "umsatz","chiffre affaires","fatturato","facturacion","omzet"],
 
-        # ── PROFIT / MARGIN ─────────────────────────────────────────────────
+        #  PROFIT / MARGIN 
         "profit":       ["profit","net profit","gross profit","operating profit","net income",
                          "earnings","ebit","ebitda","margin amount","profit amount","profit value",
                          "contribution","contribution margin","gross margin","operating income",
                          "profit_amount","profit_value","net_profit","gross_profit","op_profit",
                          "pbt","pat","profit before tax","profit after tax","bottom line","surplus",
-                         "gain","gewinn","benefice","profitto","ganancia","winst","लाभ","利润","이익"],
+                         "gain","gewinn","benefice","profitto","ganancia","winst"],
 
-        # ── QUANTITY / UNITS ─────────────────────────────────────────────────
+        #  QUANTITY / UNITS 
         "quantity":     ["quantity","qty","units sold","quantity sold","quantity ordered","units",
                          "order qty","items sold","volume","no of units","number of units","nos",
                          "pieces","pcs","count","sold qty","sales qty","dispatch qty","shipped qty",
                          "ordered qty","fulfilled qty","delivered qty","units_sold","qty_sold",
                          "no_of_units","number_of_units","menge","quantite","quantita","cantidad",
-                         "hoeveelheid","संख्या","수량","数量"],
+                         "hoeveelheid"],
 
-        # ── DISCOUNT ─────────────────────────────────────────────────────────
+        #  DISCOUNT 
         "discount":     ["discount","discount amount","discount %","discount percent","discount_amount",
                          "discount_pct","discount_percent","promo","rebate","coupon","markdown",
                          "allowance","trade discount","cash discount","promotional discount",
                          "offer amount","scheme amount","deduction","concession","reduction",
-                         "rabatt","remise","sconto","descuento","korting","छूट","할인","折扣"],
+                         "rabatt","remise","sconto","descuento","korting"],
 
-        # ── UNIT PRICE ───────────────────────────────────────────────────────
+        #  UNIT PRICE 
         "price":        ["unit price","selling price","list price","mrp","price","rate","retail price",
                          "sale price","market price","sp","basic price","base price","standard price",
                          "unit_price","selling_price","list_price","retail_price","base_price",
                          "unit cost price","per unit price","item price","product price","price per unit",
-                         "preis","prix","prezzo","precio","prijs","मूल्य","가격","价格"],
+                         "preis","prix","prezzo","precio","prijs"],
 
-        # ── UNIT COST / COGS ─────────────────────────────────────────────────
+        #  UNIT COST / COGS 
         "cost":         ["unit cost","cost of goods","cogs","purchase price","product cost","cost",
                          "landed cost","standard cost","average cost","weighted avg cost","wac",
                          "procurement cost","buying price","material cost","variable cost",
                          "cost_of_goods","purchase_price","product_cost","unit_cost","cost_price",
-                         "buying_price","kosten","cout","costo","coste","kosten","लागत","원가","成本"],
+                         "buying_price","kosten","cout","costo","coste","kosten"],
 
-        # ── TARGET / BUDGET / FORECAST ───────────────────────────────────────
+        #  TARGET / BUDGET / FORECAST 
         "target":       ["target","budget","forecast","plan","planned","projected","estimated",
                          "quota","goal","aim","objective","target_amount","budget_amount",
                          "sales_target","revenue_target","sales_budget","rev_budget","projection",
-                         "guidance","expected","annual_plan","monthly_plan","ziel","cible","목표","目标"],
+                         "guidance","expected","annual_plan","monthly_plan","ziel","cible"],
 
-        # ── PRODUCT ──────────────────────────────────────────────────────────
+        #  PRODUCT 
         "product":      ["product name","productname","product title","product","item name","item",
                          "sku","product code","product id","goods","merchandise","article","material",
                          "item_name","item_description","product_description","description","desc",
                          "part name","part number","part_name","part_no","component","model name",
                          "model number","model_name","model_no","service name","service_name",
-                         "produkt","produit","prodotto","producto","产品","제품","उत्पाद"],
+                         "produkt","produit","prodotto","producto"],
 
-        # ── CATEGORY ─────────────────────────────────────────────────────────
+        #  CATEGORY 
         "category":     ["category","product category","product group","product type","brand",
                          "line","item category","item group","item type","commodity","commodity group",
                          "category_name","product_category","product_group","item_category",
                          "product_line","segment","business segment","division","class","classification",
-                         "department","dept","family","range","collection","vertikale","катэгорыя",
-                         "kategorie","categorie","categoria","श्रेणी","범주","类别"],
+                         "department","dept","family","range","collection","vertikale",
+                         "kategorie","categorie","categoria"],
 
-        # ── SUB CATEGORY ─────────────────────────────────────────────────────
+        #  SUB CATEGORY 
         "sub_category": ["sub category","sub-category","subcategory","product sub category",
                          "sub_category","sub_cat","subcat","item sub category","item_sub_category",
                          "sub group","subgroup","product subfamily","sub type","sub_type","sub class",
                          "minor category","secondary category","level 2 category","l2_category"],
 
-        # ── REGION / TERRITORY ───────────────────────────────────────────────
+        #  REGION / TERRITORY 
         "region":       ["region","territory","area","zone","market","geography","sales_region",
                          "sales region","district","division","cluster","continent","sub_region",
                          "sub region","sales territory","sales zone","sales area","coverage area",
                          "business region","geo","location region","region_name","territory_name",
                          "north","south","east","west","north india","south india","apac","emea",
                          "americas","latam","mea","region_code","sales_zone","trade_area",
-                         "gebiet","territoire","territorio","地区","지역","क्षेत्र"],
+                         "gebiet","territoire","territorio"],
 
-        # ── CITY ─────────────────────────────────────────────────────────────
+        #  CITY 
         "city":         ["city","town","municipality","city name","city_name","ship city","bill city",
                          "delivery city","customer city","billing city","shipping city","location",
-                         "place","locality","urban area","metro","ville","ciudad","città","stad",
-                         "शहर","도시","城市"],
+                         "place","locality","urban area","metro","ville","ciudad","stad"],
 
-        # ── STATE / PROVINCE ─────────────────────────────────────────────────
+        #  STATE / PROVINCE 
         "state":        ["state","province","county","state name","state_name","ship state",
                          "billing state","customer state","delivery state","prefecture","oblast",
-                         "canton","land","bundesland","departement","provincia","provincie",
-                         "राज्य","주","省"],
+                         "canton","land","bundesland","departement","provincia","provincie"],
 
-        # ── COUNTRY ──────────────────────────────────────────────────────────
+        #  COUNTRY 
         "country":      ["country","nation","country name","country_name","ship country",
                          "billing country","customer country","delivery country","destination",
                          "origin country","market country","country_code","iso_country","iso2",
-                         "iso3","land","pays","paese","pais","देश","국가","国家"],
+                         "iso3","land","pays","paese","pais"],
 
-        # ── POSTAL CODE ──────────────────────────────────────────────────────
+        #  POSTAL CODE 
         "postal_code":  ["postal code","postcode","zip code","zip","pin code","pincode","pin",
                          "postal_code","post_code","zip_code","pin_code","area code","plz",
                          "code postal","codice postale","codigo postal","postcode"],
 
-        # ── CUSTOMER ─────────────────────────────────────────────────────────
+        #  CUSTOMER 
         "customer":     ["customer name","customer id","customerid","customer","client name","client id",
                          "client","buyer","consumer","account","user","customer_name","customer_id",
                          "client_name","client_id","account_name","account_id","party name","party",
                          "sold to","sold_to","bill to","bill_to","debtor","purchaser","end customer",
                          "retailer","dealer","distributor","partner","contact name","customer_code",
-                         "cust_id","cust_name","acc_name","ग्राहक","고객","客户"],
+                         "cust_id","cust_name","acc_name"],
 
-        # ── CUSTOMER SEGMENT ─────────────────────────────────────────────────
+        #  CUSTOMER SEGMENT 
         "segment":      ["customer segment","market segment","customer type","business segment",
                          "segment","tier","customer tier","account type","customer_segment",
                          "customer_type","market_segment","business_type","channel_type","b2b","b2c",
                          "consumer type","buyer type","priority","classification","grade","abc class"],
 
-        # ── ORDER ID ─────────────────────────────────────────────────────────
+        #  ORDER ID 
         "order_id":     ["order id","order no","orderid","transaction id","invoice id","order number",
                          "purchase id","booking id","reference no","ref no","confirmation number",
                          "order_id","order_no","transaction_id","invoice_id","order_number",
@@ -404,60 +401,58 @@ def detect_columns(df):
                          "so no","sales order","bill number","bill no","bill_number","voucher no",
                          "voucher number","docket no","ref_id","txn_id","receipt_no","document_no"],
 
-        # ── SHIPPING MODE ────────────────────────────────────────────────────
+        #  SHIPPING MODE 
         "ship_mode":    ["ship mode","shipping mode","delivery mode","shipment type","ship method",
                          "shipping_mode","ship_mode","delivery_type","dispatch_mode","courier",
                          "carrier","logistics","transport mode","freight type","express","standard"],
 
-        # ── SALESPERSON / REP ────────────────────────────────────────────────
+        #  SALESPERSON / REP 
         "sales_rep":    ["sales rep","salesperson","sales person","account manager","am",
                          "sales executive","se","sales officer","so","sales manager","sm",
                          "rep name","rep id","agent","agent name","broker","field rep",
                          "sales_rep","sales_person","account_manager","sales_executive",
                          "territory manager","territory_manager","relationship manager","rm"],
 
-        # ── EMPLOYEE ID ──────────────────────────────────────────────────────
+        #  EMPLOYEE ID 
         "employee_id":  ["employee id","emp id","employee_id","emp_id","staff id","worker id",
                          "empid","employee number","emp number","emp_no","employee_no","staff_id",
                          "worker_id","personnel_id","personnel id","associate id","associate_id",
                          "badge number","badge_no","payroll id","payroll_id","hr id","hr_id"],
 
-        # ── EMPLOYEE NAME ─────────────────────────────────────────────────────
+        #  EMPLOYEE NAME 
         "employee_name":["employee name","emp name","staff name","worker name","full name","name",
                          "employee_name","emp_name","staff_name","worker_name","full_name",
                          "first name","last name","associate name","associate_name","personnel name",
                          "team member","resource name","resource_name","consultant name"],
 
-        # ── SALARY ───────────────────────────────────────────────────────────
+        #  SALARY 
         "salary":       ["salary","annual salary","monthly salary","base salary","wage","compensation",
                          "pay","ctc","total compensation","gross salary","net salary","income",
                          "remuneration","emoluments","fixed pay","basic pay","basic salary",
                          "total pay","total salary","salary_amount","compensation_amount","ctc_amount",
                          "gross_salary","net_salary","base_pay","annual_ctc","monthly_ctc",
-                         "earnings","take home","in hand","gehalt","salaire","stipendio","salario",
-                         "वेतन","급여","薪资"],
+                         "earnings","take home","in hand","gehalt","salaire","stipendio","salario"],
 
-        # ── DEPARTMENT ───────────────────────────────────────────────────────
+        #  DEPARTMENT 
         "department":   ["department","dept","division","team","function","business unit","org unit",
                          "department_name","dept_name","business_unit","cost centre","cost center",
                          "cc","profit centre","profit center","sub department","sub_department",
-                         "group","section","branch","unit","abteilung","departement","dipartimento",
-                         "विभाग","부서","部门"],
+                         "group","section","branch","unit","abteilung","departement","dipartimento"],
 
-        # ── GENDER ───────────────────────────────────────────────────────────
+        #  GENDER 
         "gender":       ["gender","sex","employee gender","gender_code","gender_type","male female",
-                         "m f","geschlecht","genre","genere","genero","लिंग","성별","性别"],
+                         "m f","geschlecht","genre","genere","genero"],
 
-        # ── AGE ──────────────────────────────────────────────────────────────
+        #  AGE 
         "age":          ["age","employee age","age_years","age in years","years old","worker age",
-                         "alter","age_band","age_bucket","आयु","나이","年龄"],
+                         "alter","age_band","age_bucket"],
 
-        # ── AGE GROUP ────────────────────────────────────────────────────────
+        #  AGE GROUP 
         "age_group":    ["age group","age band","age bracket","age range","age_group","age_band",
                          "age_bracket","age_range","age bucket","age_bucket","age category",
                          "generation","gen z","millennial","boomer","cohort"],
 
-        # ── TENURE ───────────────────────────────────────────────────────────
+        #  TENURE 
         "tenure":       ["tenure","years of service","experience","years at company","seniority",
                          "service years","employment duration","years in company","yearsatcompany",
                          "years_at_company","total working years","totalworkingyears","yrs_experience",
@@ -465,69 +460,69 @@ def detect_columns(df):
                          "employment_duration","months_of_service","length_of_service","los",
                          "experience_years","work_experience","total_experience","exp_years"],
 
-        # ── ATTRITION / CHURN ────────────────────────────────────────────────
+        #  ATTRITION / CHURN 
         "attrition":    ["attrition","left company","churn","resigned","turnover","exit","is churned",
                          "employee status","employment status","status","left","voluntary_termination",
                          "is_active","active_status","separation","termination","resigned_flag",
                          "attrition_flag","churn_flag","exit_flag","active","inactive","left_flag",
                          "still_employed","employed","separation_type","resignation"],
 
-        # ── JOB TITLE ────────────────────────────────────────────────────────
+        #  JOB TITLE 
         "job_title":    ["job title","designation","position","role","job role","title","job level",
                          "jobrole","joblevel","job_level","job_role","grade","band","pay_grade",
                          "job_title","job_designation","work_title","position_title","employee_role",
                          "function_title","work_level","career_level","level","rank","cadre",
                          "post","designation_name","role_name","profile"],
 
-        # ── HIRE DATE ────────────────────────────────────────────────────────
+        #  HIRE DATE 
         "hire_date":    ["hire date","joining date","start date","date of joining","doj","date joined",
                          "employment date","onboard date","hire_date","joining_date","start_date",
                          "date_of_joining","date_of_hire","joining_dt","doj","joining_month",
                          "employment_start","commencement_date","effective_date","date_of_appointment"],
 
-        # ── PERFORMANCE ──────────────────────────────────────────────────────
+        #  PERFORMANCE 
         "performance":  ["performance","performance rating","perf rating","rating","appraisal",
                          "performance score","review score","performance_rating","perf_rating",
                          "performance_score","annual_rating","kra_score","kpi_score","gor_score",
                          "review_rating","goal_rating","competency_score","overall_rating",
                          "performance_band","performance_grade","bell_curve"],
 
-        # ── EDUCATION ────────────────────────────────────────────────────────
+        #  EDUCATION 
         "education":    ["education","qualification","degree","education level","education_level",
                          "education_qualification","highest_qualification","academic_qualification",
                          "highest_education","degree_type","field_of_study","major","discipline",
                          "course","stream","specialization","educational_background"],
 
-        # ── MARITAL STATUS ───────────────────────────────────────────────────
+        #  MARITAL STATUS 
         "marital":      ["marital status","marital","relationship status","married","single",
                          "marital_status","family_status","civil_status","matrimonial_status"],
 
-        # ── AD SPEND ─────────────────────────────────────────────────────────
+        #  AD SPEND 
         "spend":        ["ad spend","marketing spend","campaign cost","ad cost","media spend",
                          "advertising spend","spend","marketing budget","ad_spend","media_cost",
                          "advertising_cost","marketing_cost","campaign_spend","paid_spend",
                          "digital_spend","media_budget","total_spend","cost_incurred","expenditure",
                          "marketing_expenditure","ad_expenditure","media_expenditure","budget_spent",
-                         "amount_spent","kosten","depense","spesa","gasto","उपभोग","지출","支出"],
+                         "amount_spent","kosten","depense","spesa","gasto"],
 
-        # ── CAMPAIGN REVENUE ─────────────────────────────────────────────────
+        #  CAMPAIGN REVENUE 
         "revenue":      ["revenue","campaign revenue","total revenue","net revenue","gross revenue",
                          "attributed_revenue","marketing_revenue","campaign_value","revenue_generated",
                          "attributed_sales","influenced_revenue","pipeline_value"],
 
-        # ── CAMPAIGN ID / NAME ───────────────────────────────────────────────
+        #  CAMPAIGN ID / NAME 
         "campaign_id":  ["campaign","campaign id","campaign_id","campaignid","campaign name",
                          "campaign_name","ad name","ad_name","ad campaign","ad_campaign",
                          "campaign_title","promo_name","promotion_name","promotion_id","promo_id",
                          "initiative","program_name","initiative_name","scheme_name","offer_name"],
 
-        # ── DEMOGRAPHY ───────────────────────────────────────────────────────
+        #  DEMOGRAPHY 
         "demography":   ["demography","demographic","age group","age_group","audience","target audience",
                          "target_audience","age band","age_band","audience_segment","audience_type",
                          "profile","customer_profile","audience_age","demographic_segment","user_segment",
                          "demo","target_demo","target_group","demographic_group","cohort"],
 
-        # ── MARKETING CHANNEL ────────────────────────────────────────────────
+        #  MARKETING CHANNEL 
         "channel":      ["marketing channel","ad channel","traffic source","utm source","utm_source",
                          "campaign type","acquisition channel","ad platform","media channel",
                          "channel","medium","source","utm_medium","utm_campaign","platform",
@@ -535,138 +530,138 @@ def detect_columns(df):
                          "digital_channel","organic","paid","social","email","search","display",
                          "affiliate","referral","direct","seo","sem","ppc","social_media"],
 
-        # ── IMPRESSIONS / VIEWS ──────────────────────────────────────────────
+        #  IMPRESSIONS / VIEWS 
         "impressions":  ["impressions","impression","views","reach","page views","pageviews",
                          "ad views","ad_impressions","total_impressions","total_views","exposures",
                          "served","ad_served","total_reach","gross_impressions","unique_reach"],
 
-        # ── CLICKS ───────────────────────────────────────────────────────────
+        #  CLICKS 
         "clicks":       ["clicks","click","click through","link clicks","total clicks","ad clicks",
                          "link_clicks","total_clicks","ad_clicks","ctr_clicks","visits","sessions",
                          "unique_clicks","paid_clicks","organic_clicks"],
 
-        # ── CONVERSIONS / LEADS ──────────────────────────────────────────────
+        #  CONVERSIONS / LEADS 
         "conversions":  ["conversions","conversion","leads","sign ups","signups","purchases","goals",
                          "total_conversions","lead_count","leads_generated","form_fills","inquiries",
                          "enquiries","responses","downloads","installs","activations","trials",
                          "registrations","bookings","orders","acquisitions","new_customers"],
 
-        # ── ROI / ROAS ───────────────────────────────────────────────────────
+        #  ROI / ROAS 
         "roi":          ["roi","roas","return on investment","return on ad spend","marketing_roi",
                          "campaign_roi","ad_roi","roi_percent","roas_value","efficiency",
                          "revenue_per_cost","revenue_to_cost","return_multiple"],
 
-        # ── CTR ──────────────────────────────────────────────────────────────
+        #  CTR 
         "ctr":          ["ctr","click through rate","click_through_rate","click_rate","ad_ctr",
                          "engagement_rate","interaction_rate","response_rate"],
 
-        # ── DISTRIBUTION CHANNEL ─────────────────────────────────────────────
+        #  DISTRIBUTION CHANNEL 
         "distribution_channel": ["distribution channel","sales channel","order channel",
                          "distribution_channel","sales_channel","order_channel","booking_channel",
                          "fulfillment_channel","purchase_channel","buying_channel"],
 
-        # ── STORE / BRANCH ───────────────────────────────────────────────────
+        #  STORE / BRANCH 
         "store":        ["store name","store id","store","branch","outlet","shop","point of sale",
                          "pos","store_name","store_id","branch_name","branch_id","outlet_name",
                          "outlet_id","shop_name","location_name","site","site_name","site_id",
                          "venue","kiosk","showroom","retail_location","store_code","branch_code"],
 
-        # ── PAYMENT METHOD ───────────────────────────────────────────────────
+        #  PAYMENT METHOD 
         "payment":      ["payment method","payment type","payment mode","pay method","mode of payment",
                          "payment_method","payment_type","payment_mode","tender_type","tender",
                          "mop","mode","settlement_mode","transaction_mode","pay_type","pay_mode",
                          "instrument","card type","card_type","upi","neft","rtgs","cheque","cash",
                          "credit card","debit card","net banking","wallet","cod"],
 
-        # ── DELIVERY / SHIPPING TIME ─────────────────────────────────────────
+        #  DELIVERY / SHIPPING TIME 
         "delivery":     ["delivery time","shipping days","days to ship","lead time","fulfillment time",
                          "days to deliver","shipping time","transit days","delivery_time","ship_days",
                          "lead_time","delivery_days","tat","turnaround","turnaround_time","sla",
                          "time_to_deliver","dispatch_time","processing_time","handling_time"],
 
-        # ── RETURNS / REFUNDS ────────────────────────────────────────────────
+        #  RETURNS / REFUNDS 
         "returns":      ["return status","returned","return","returns","refund","refunded","is returned",
                          "return_status","return_flag","refund_status","is_returned","rma",
                          "return_reason","return_type","reversal","cancellation","cancelled",
                          "chargeback","return_amount","refund_amount","reverse","recall"],
 
-        # ── SATISFACTION / RATING ────────────────────────────────────────────
+        #  SATISFACTION / RATING 
         "satisfaction": ["satisfaction score","satisfaction","nps","csat","review score","feedback score",
                          "star rating","rating score","satisfaction_score","customer_satisfaction",
                          "nps_score","csat_score","review_rating","feedback_rating","rating",
                          "score","stars","review","customer_rating","survey_score","happiness_index",
                          "loyalty_score","net_promoter","promoter_score","detractor_score"],
 
-        # ── LOYALTY POINTS ───────────────────────────────────────────────────
+        #  LOYALTY POINTS 
         "loyalty_points":["loyalty points","reward points","points earned","points balance","miles",
                          "loyalty_points","reward_points","points_earned","points_balance","cashback",
                          "bonus points","redeem points","membership points","tier_points"],
 
-        # ── DEVICE / PLATFORM ────────────────────────────────────────────────
+        #  DEVICE / PLATFORM 
         "device":       ["device","device type","platform","os","browser","user agent","channel device",
                          "device_type","mobile","desktop","tablet","app","web","app_type",
                          "access_channel","access_device","user_device","screen_type"],
 
-        # ── RETURN REASON ────────────────────────────────────────────────────
+        #  RETURN REASON 
         "return_reason":["return reason","reason for return","refund reason","cancellation reason",
                          "return_reason","refund_reason","cancellation_reason","reason_for_cancellation",
                          "return_category","defect_type","complaint_reason"],
 
-        # ── SHIPPING COUNTRY ─────────────────────────────────────────────────
+        #  SHIPPING COUNTRY 
         "shipping_country":["shipping country","ship to country","delivery country","destination country",
                          "shipping_country","ship_to_country","delivery_country","destination_country",
                          "consignee_country","recipient_country","to_country"],
 
-        # ── VENDOR / SUPPLIER ────────────────────────────────────────────────
+        #  VENDOR / SUPPLIER 
         "vendor":       ["vendor","supplier","vendor name","supplier name","vendor_name","supplier_name",
                          "vendor_id","supplier_id","manufacturer","oem","brand owner","principal",
                          "source","source_name","distributor","wholesaler","trader","importer"],
 
-        # ── FRAUD LABEL ──────────────────────────────────────────────────────
+        #  FRAUD LABEL 
         "fraud_label":  ["class","label","fraud","is_fraud","isfraud","fraud_flag","fraudulent",
                          "is_fraudulent","fraud_ind","fraud_indicator","suspicious","anomaly",
                          "flagged","target","is fraud","fraud_label","label_class","isFraud",
                          "is_suspicious","risk_flag","alert_flag","exception_flag"],
 
-        # ── FRAUD AMOUNT ─────────────────────────────────────────────────────
+        #  FRAUD AMOUNT 
         "fraud_amount": ["transaction amount","trans amount","amount","step_amount","transaction value",
                          "trans_amount","oldbalanceorg","newbalanceorig","txn_amount","payment_amount",
                          "transfer_amount","withdraw_amount","deposit_amount","debit_amount","credit_amount"],
 
-        # ── FRAUD TIME ───────────────────────────────────────────────────────
+        #  FRAUD TIME 
         "fraud_time":   ["step","time","timestamp","transaction time","trans_time","transaction_date",
                          "trans_date","txn_time","txn_date","event_time","event_timestamp",
                          "occurrence_time","detection_time"],
 
-        # ── FRAUD TYPE ───────────────────────────────────────────────────────
+        #  FRAUD TYPE 
         "fraud_type":   ["type","transaction type","trans_type","payment_type","fraud_type",
                          "transaction_type","nameorig","namedest","transfer_type","txn_type",
                          "fraud_category","fraud_method","scheme_type","modus_operandi"],
 
-        # ── FRAUD ID ─────────────────────────────────────────────────────────
+        #  FRAUD ID 
         "fraud_id":     ["transaction id","trans_id","transactionid","nameorig","step","txn_id",
                          "case_id","alert_id","incident_id","reference_id","fraud_case_id"],
 
-        # ── FRAUD CHANNEL ────────────────────────────────────────────────────
+        #  FRAUD CHANNEL 
         "fraud_channel":["channel","device","medium","source","origin","fraud_channel","access_channel",
                          "entry_point","channel_type","atm","pos","online","mobile_banking","branch"],
 
-        # ── FRAUD LOCATION ───────────────────────────────────────────────────
+        #  FRAUD LOCATION 
         "fraud_loc":    ["merchant","location","terminal","merchant_name","merchant_category",
                          "merchant_city","merchant_state","merchant_country","mcc","merchant_id",
                          "terminal_id","pos_location","atm_location","ip_address","geo_location"],
 
-        # ── FRAUD SCORE ──────────────────────────────────────────────────────
+        #  FRAUD SCORE 
         "fraud_score":  ["fraud_score","risk_score","anomaly_score","score","confidence",
                          "probability","pred_proba","risk","risk_rating","threat_score",
                          "suspicion_score","ml_score","model_score","detection_score"],
 
-        # ── ACCOUNT BALANCE ──────────────────────────────────────────────────
+        #  ACCOUNT BALANCE 
         "balance":      ["balance","account balance","old balance","new balance","closing balance",
                          "opening balance","oldbalanceorig","newbalanceorig","oldbalancedest",
                          "newbalancedest","available_balance","ledger_balance","current_balance"],
 
-        # ── LATITUDE / LONGITUDE (Geospatial) ───────────────────────────────
+        #  LATITUDE / LONGITUDE (Geospatial) 
         "latitude":     ["latitude","lat","lat_coordinate","y_coordinate","geo_lat"],
         "longitude":    ["longitude","lon","lng","long","lon_coordinate","x_coordinate","geo_lon"],
     }
@@ -2440,8 +2435,7 @@ def generate_pdf_report(df, found, domain):
                 ("ALIGN",         (0,0), (-1,-1),  "LEFT"),
                 ("TOPPADDING",    (0,0), (-1,-1),  4),
                 ("BOTTOMPADDING", (0,0), (-1,-1),  4),
-                ("LEFTPADDING",   (0,0), (-1,-1),  6),
-            ]))
+                ("LEFTPADDING",   (0,0), (-1,-1),  6)]))
             return t
 
         now   = datetime.datetime.now().strftime("%d %B %Y, %H:%M")
@@ -2454,8 +2448,7 @@ def generate_pdf_report(df, found, domain):
             HRFlowable(width="100%", thickness=2, color=dc, spaceAfter=8),
             Paragraph(f"Domain: <b>{domain}</b>  |  Generated: {now}", sub_s),
             Paragraph(f"Dataset: {len(df):,} records × {len(df.columns)} columns", sub_s),
-            Spacer(1, 0.5*cm),
-        ]
+            Spacer(1, 0.5*cm)]
 
         sc   = found.get("sales");    pc   = found.get("profit")
         prd  = found.get("product");  cat  = found.get("category")
@@ -2595,8 +2588,7 @@ def generate_pdf_report(df, found, domain):
         story += [
             Spacer(1, 0.5*cm),
             HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e2e8f0"), spaceAfter=4),
-            Paragraph(f"Generated by Universal Agentic AI Data Analyst  ·  {now}  ·  Domain: {domain}", sub_s),
-        ]
+            Paragraph(f"Generated by Universal Agentic AI Data Analyst  ·  {now}  ·  Domain: {domain}", sub_s)]
 
         doc.build(story)
         buf.seek(0)
@@ -2708,8 +2700,7 @@ DOMAIN_PRESETS = {
             "params": {"col_key": "salary",
                        "labels": ["Low", "Mid", "High", "Senior"]},
             "icon": "💼",
-        },
-    ],
+        }],
     "Sales": [
         {
             "name": "Profit Margin %",
@@ -2759,8 +2750,7 @@ DOMAIN_PRESETS = {
             "params": {"col_key": "sales",
                        "labels": ["Small", "Medium", "Large", "Enterprise"]},
             "icon": "📦",
-        },
-    ],
+        }],
     "Marketing": [
         {
             "name": "CTR %",
@@ -2801,8 +2791,7 @@ DOMAIN_PRESETS = {
             "type": "ratio",
             "params": {"num_key": "sales", "den_key": "spend", "multiply": 1},
             "icon": "📈",
-        },
-    ],
+        }],
     "Ecommerce": [
         {
             "name": "Profit Margin %",
@@ -2828,8 +2817,7 @@ DOMAIN_PRESETS = {
             "params": {"col_key": "delivery", "threshold": 7,
                        "above_label": "Late", "below_label": "On Time"},
             "icon": "🚚",
-        },
-    ],
+        }],
     "Retail": [
         {
             "name": "Profit Margin %",
@@ -2854,8 +2842,7 @@ DOMAIN_PRESETS = {
             "type": "net_after_discount",
             "params": {"revenue_key": "sales", "discount_key": "discount"},
             "icon": "💰",
-        },
-    ],
+        }],
     "Fraud": [
         {
             "name": "Amount Band",
@@ -2865,8 +2852,7 @@ DOMAIN_PRESETS = {
             "params": {"col_key": "sales",
                        "labels": ["Low", "Medium", "High", "Very High"]},
             "icon": "💳",
-        },
-    ],
+        }],
     "Generic": [],
 }
 
@@ -5033,8 +5019,7 @@ def render_advanced_dashboard(df, found, domain):
                 "steps": [
                     {"range": [0,  60], "color": "rgba(239,68,68,0.15)"},
                     {"range": [60, 80], "color": "rgba(245,158,11,0.15)"},
-                    {"range": [80,100], "color": "rgba(16,185,129,0.15)"},
-                ],
+                    {"range": [80,100], "color": "rgba(16,185,129,0.15)"}],
                 "threshold": {
                     "line" : {"color": C["green"], "width": 3},
                     "thickness": 0.8, "value": 80
@@ -5061,8 +5046,7 @@ def render_advanced_dashboard(df, found, domain):
                 "steps": [
                     {"range": [0,  50], "color": "rgba(239,68,68,0.12)"},
                     {"range": [50, 75], "color": "rgba(245,158,11,0.12)"},
-                    {"range": [75,100], "color": "rgba(16,185,129,0.12)"},
-                ],
+                    {"range": [75,100], "color": "rgba(16,185,129,0.12)"}],
             }
         ))
         fig_g2.update_layout(**cd(260))
@@ -5089,8 +5073,7 @@ def render_advanced_dashboard(df, found, domain):
                 "steps": [
                     {"range": [0,  40], "color": "rgba(239,68,68,0.12)"},
                     {"range": [40, 70], "color": "rgba(245,158,11,0.12)"},
-                    {"range": [70,100], "color": "rgba(16,185,129,0.12)"},
-                ],
+                    {"range": [70,100], "color": "rgba(16,185,129,0.12)"}],
             }
         ))
         fig_g3.update_layout(**cd(260))
@@ -5137,8 +5120,7 @@ def render_advanced_dashboard(df, found, domain):
                              (df[val_col] <= df[val_col].quantile(0.50))].sum(),
                 df[val_col][(df[val_col] > df[val_col].quantile(0.50)) &
                              (df[val_col] <= df[val_col].quantile(0.75))].sum(),
-                df[val_col][df[val_col] > df[val_col].quantile(0.75)].sum(),
-            ]
+                df[val_col][df[val_col] > df[val_col].quantile(0.75)].sum()]
             fig_wf = go.Figure(go.Waterfall(
                 orientation = "v",
                 measure     = ["relative","relative","relative","total"],
@@ -5354,8 +5336,7 @@ def main():
             ("👥 HR","Headcount, salary by dept, gender pay gap, attrition, tenure, hiring trends"),
             ("🛒 Ecommerce","Revenue, RFM customers, returns, delivery time, payment methods"),
             ("🏪 Retail","Store performance, product mix, discount impact, regional breakdown"),
-            ("🚨 Fraud","Fraud rate, amount analysis, time patterns, feature correlation"),
-        ]
+            ("🚨 Fraud","Fraud rate, amount analysis, time patterns, feature correlation")]
         for i,(title,desc) in enumerate(descriptions):
             with cols[i%3]:
                 st.markdown(f'<div class="insight-box"><strong>{title}</strong><br>{desc}</div>',
