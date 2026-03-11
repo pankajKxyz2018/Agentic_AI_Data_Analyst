@@ -5056,11 +5056,14 @@ def main():
             "employee_name":("Employee Name",            all_c, "👥 HR"),
             # ── Marketing ────────────────────────────────────────────────
             "spend":       ("Ad Spend / Marketing Cost", num_c, "📣 Marketing"),
+            "revenue":     ("Campaign Revenue",          num_c, "📣 Marketing"),
             "channel":     ("Marketing Channel",         all_c, "📣 Marketing"),
             "impressions": ("Impressions / Views",       num_c, "📣 Marketing"),
             "clicks":      ("Clicks",                    num_c, "📣 Marketing"),
             "conversions": ("Conversions / Leads",       num_c, "📣 Marketing"),
             "roi":         ("ROI / ROAS",                num_c, "📣 Marketing"),
+            "demography":  ("Demography / Age Group",    all_c, "📣 Marketing"),
+            "campaign_id": ("Campaign ID",               all_c, "📣 Marketing"),
             # ── Ecommerce / Retail ────────────────────────────────────────
             "store":       ("Store / Branch Name",       all_c, "🏪 Retail"),
             "payment":     ("Payment Method",            all_c, "🏪 Retail"),
@@ -5098,37 +5101,40 @@ def main():
         for key,(lbl,opts,sec) in KEY_CATALOGUE.items():
             sections.setdefault(sec, []).append((key, lbl, opts))
 
-        # Render active sections expanded, others collapsed/greyed
+        # Render active sections — each section in its own expander
+        # Items laid out 3 per row using explicit row containers
         all_sec_names = list(sections.keys())
         for sec_name in all_sec_names:
-            keys = sections[sec_name]
+            sec_keys = sections[sec_name]
             is_active = sec_name in active_sections
             badge = "" if is_active else " — not used for this domain"
             with st.expander(f"{sec_name}{badge}", expanded=is_active):
                 if not is_active:
-                    st.caption("These columns are not typically used for the detected domain. "
-                               "You can still manually map them if needed.")
-                # Create a new row of 3 columns every 3 items — prevents all-in-one-line bug
-                for i,(key,lbl,opts) in enumerate(keys):
-                    if i % 3 == 0:
-                        cols = st.columns(3)
-                    cur = found.get(key, NONE)
-                    safe_cur = cur if cur in opts else NONE
-                    idx = opts.index(safe_cur)
-                    disabled = (not is_active and safe_cur == NONE)
-                    chosen = cols[i % 3].selectbox(
-                        lbl,
-                        opts,
-                        index=idx,
-                        key=f"ov_{key}",
-                        disabled=disabled,
-                        help=(f"Auto-detected: {cur}" if cur != NONE
-                              else "Not detected — select manually if needed")
-                    )
-                    if chosen != NONE:
-                        found[key] = chosen
-                    elif key in found:
-                        del found[key]
+                    st.caption("Not used for this domain — map manually if needed.")
+
+                # Split into chunks of 3 — each chunk gets its own st.columns(3) row
+                chunks = [sec_keys[i:i+3] for i in range(0, len(sec_keys), 3)]
+                for chunk in chunks:
+                    row_cols = st.columns(3)
+                    for col_idx, (key, lbl, opts) in enumerate(chunk):
+                        cur      = found.get(key, NONE)
+                        safe_cur = cur if cur in opts else NONE
+                        idx      = opts.index(safe_cur)
+                        disabled = (not is_active and safe_cur == NONE)
+                        with row_cols[col_idx]:
+                            chosen = st.selectbox(
+                                lbl,
+                                opts,
+                                index=idx,
+                                key=f"ov_{key}",
+                                disabled=disabled,
+                                help=(f"Auto-detected: {cur}" if cur != NONE
+                                      else "Not detected — select manually if needed"),
+                            )
+                        if chosen != NONE:
+                            found[key] = chosen
+                        elif key in found:
+                            del found[key]
 
         # ── Duplicate Warning ─────────────────────────────────────────────
         st.markdown("---")
