@@ -307,6 +307,11 @@ def detect_columns(df):
         "marital":     ["marital status","marital","relationship status"],
         "spend":       ["ad spend","marketing spend","campaign cost","ad cost","media spend",
                         "advertising spend","spend","marketing budget"],
+        "revenue":     ["revenue","campaign revenue","total revenue","net revenue","gross revenue"],
+        "campaign_id": ["campaign","campaign id","campaign_id","campaignid","campaign name",
+                        "campaign_name","ad name","ad_name"],
+        "demography":  ["demography","demographic","age group","age_group","audience","target audience",
+                        "age band","age_band"],
         "channel":     ["marketing channel","ad channel","traffic source","utm source",
                         "campaign type","acquisition channel","ad platform","media channel"],
         "distribution_channel":["channel","distribution channel","sales channel","order channel"],
@@ -405,6 +410,37 @@ def detect_columns(df):
                 if any(k in norm(col) for k in ["date","time","month","year","period"]):
                     found["date"]=col; break
 
+    # Pass 6: Deduplication — same dataset column must not be assigned to two keys
+    # If "revenue" col is assigned to both "sales" and "revenue" keys,
+    # keep "sales" for sales-dominant data, "revenue" for marketing-dominant data.
+    # Simple rule: later key wins only if the earlier key has a more specific alternative.
+    EXCLUSIVE_GROUPS = [
+        # Within each group, one dataset column can only be used by ONE key
+        # Priority order = list order (first = highest priority)
+        ["sales", "revenue"],          # revenue col → sales key wins unless marketing data
+        ["spend",  "cost"],            # cost col → spend for marketing, cost for sales
+        ["channel","distribution_channel"],  # channel col → one winner
+        ["date",   "fraud_time", "hire_date"],  # date col → most specific wins
+    ]
+
+    col_to_keys = {}
+    for k, v in found.items():
+        col_to_keys.setdefault(v, []).append(k)
+
+    for col, assigned_keys in col_to_keys.items():
+        if len(assigned_keys) <= 1:
+            continue
+        # Find if these keys are in the same exclusive group
+        for group in EXCLUSIVE_GROUPS:
+            group_matches = [k for k in assigned_keys if k in group]
+            if len(group_matches) >= 2:
+                # Keep highest priority (lowest index in group), remove rest
+                group_matches.sort(key=lambda k: group.index(k))
+                winner = group_matches[0]
+                for loser in group_matches[1:]:
+                    del found[loser]
+                break
+
     return found
 
 # ─── Fraud Check ──────────────────────────────────────────────────────────────
@@ -438,12 +474,17 @@ def detect_domain(df, found):
     if "customer" in keys: scores["Sales"]+=1
     if any(k in h for k in ["order","invoice","sales","revenue","profit"]): scores["Sales"]+=2
 
-    if "impressions" in keys: scores["Marketing"]+=4
-    if "clicks"      in keys: scores["Marketing"]+=4
-    if "conversions" in keys: scores["Marketing"]+=3
-    if "channel"     in keys: scores["Marketing"]+=3
-    if "spend"       in keys: scores["Marketing"]+=3
-    if any(k in h for k in ["campaign","ctr","cpm","roas","utm"]): scores["Marketing"]+=3
+    if "impressions"  in keys: scores["Marketing"]+=5; scores["Sales"]-=3
+    if "clicks"       in keys: scores["Marketing"]+=5; scores["Sales"]-=3
+    if "conversions"  in keys: scores["Marketing"]+=4; scores["Sales"]-=2
+    if "channel"      in keys: scores["Marketing"]+=3
+    if "spend"        in keys: scores["Marketing"]+=4; scores["Sales"]-=2
+    if "campaign_id"  in keys: scores["Marketing"]+=5; scores["Sales"]-=4
+    if "demography"   in keys: scores["Marketing"]+=4; scores["Sales"]-=3
+    if "roi"          in keys: scores["Marketing"]+=3
+    if "revenue"      in keys: scores["Marketing"]+=2  # revenue key = marketing-specific
+    if any(k in h for k in ["campaign","ctr","cpm","roas","utm","demograph","impression"]):
+        scores["Marketing"]+=4; scores["Sales"]-=3
     if "distribution_channel" in keys and "impressions" not in keys: scores["Marketing"]-=2
 
     if "salary"     in keys: scores["HR"]+=6; scores["Sales"]-=4
@@ -4994,174 +5035,178 @@ def main():
     anomalies = detect_anomalies(df, found, domain)
     render_anomaly_banner(anomalies, domain)
 
-    # ── Override Panel ────────────────────────────────────────────────────
-    # ── Column Mapping Panel ─────────────────────────────────────────────
+    # ── Column Mapping & Domain Override ────────────────────────────────────
     with st.expander("⚙️ Column Mapping & Domain Override", expanded=False):
 
-        st.markdown("**🎯 Domain Detection**")
+        # ── Domain selector ──────────────────────────────────────────────
+        st.markdown("**🎯 Detected Domain — change if wrong:**")
         domain_list = ["Sales","Marketing","HR","Ecommerce","Retail","Fraud","Generic"]
-        domain = st.selectbox("Detected Domain — change if wrong:",
-            domain_list, index=domain_list.index(domain), key="domain_override")
-
+        domain = st.selectbox("Domain", domain_list,
+            index=domain_list.index(domain), key="domain_override",
+            label_visibility="collapsed")
         st.markdown("---")
-        st.markdown(
-            "**🔗 Column Mappings** — auto-detected below. "
-            "Change any dropdown if the engine picked the wrong column. "
-            "Set to *— not mapped —* to remove a mapping.")
+        st.markdown("**🔗 Column Mappings** — auto-detected. Change any dropdown to override. "
+                    "Set *— not mapped —* to remove.")
+        st.markdown("")
 
-        # All dataset columns available for selection
-        NONE = "— not mapped —"
+        # ── Build option lists ────────────────────────────────────────────
+        NONE  = "— not mapped —"
         all_c = [NONE] + list(df.columns)
         num_c = [NONE] + df.select_dtypes(include="number").columns.tolist()
-        cat_c = [NONE] + df.select_dtypes(include=["object","category"]).columns.tolist()
         dt_c  = [NONE] + [c for c in df.columns
                           if pd.api.types.is_datetime64_any_dtype(df[c])
                           or any(k in c.lower() for k in ["date","time","month","year","period"])]
 
-        # Full key catalogue — label, options list, section
+        # ── Key catalogue: (label, options, section) ─────────────────────
         KEY_CATALOGUE = {
-            # ── Sales / Revenue ──────────────────────────────────────────
-            "sales":       ("Revenue / Sales Amount",    num_c, "💼 Sales & Revenue"),
-            "profit":      ("Profit / Net Income",       num_c, "💼 Sales & Revenue"),
-            "quantity":    ("Quantity / Units Sold",     num_c, "💼 Sales & Revenue"),
-            "discount":    ("Discount / Promo Amount",   num_c, "💼 Sales & Revenue"),
-            "price":       ("Unit Price",                num_c, "💼 Sales & Revenue"),
-            "cost":        ("Unit Cost / COGS",          num_c, "💼 Sales & Revenue"),
-            # ── Dimensions ───────────────────────────────────────────────
-            "date":        ("Date / Transaction Date",   dt_c,  "📅 Dimensions"),
-            "product":     ("Product Name",              all_c, "📅 Dimensions"),
-            "category":    ("Category / Product Group",  all_c, "📅 Dimensions"),
-            "sub_category":("Sub-Category",              all_c, "📅 Dimensions"),
-            "region":      ("Region / Territory",        all_c, "📅 Dimensions"),
-            "city":        ("City",                      all_c, "📅 Dimensions"),
-            "state":       ("State / Province",          all_c, "📅 Dimensions"),
-            "country":     ("Country",                   all_c, "📅 Dimensions"),
-            "customer":    ("Customer Name / ID",        all_c, "📅 Dimensions"),
-            "segment":     ("Customer Segment",          all_c, "📅 Dimensions"),
-            "ship_mode":   ("Shipping Mode",             all_c, "📅 Dimensions"),
-            "order_id":    ("Order ID",                  all_c, "📅 Dimensions"),
-            # ── HR ───────────────────────────────────────────────────────
-            "salary":      ("Salary / Compensation",     num_c, "👥 HR"),
-            "department":  ("Department / Division",     all_c, "👥 HR"),
-            "gender":      ("Gender",                    all_c, "👥 HR"),
-            "age":         ("Age",                       num_c, "👥 HR"),
-            "age_group":   ("Age Group / Band",          all_c, "👥 HR"),
-            "tenure":      ("Tenure / Years of Service", num_c, "👥 HR"),
-            "attrition":   ("Attrition / Left Company",  all_c, "👥 HR"),
-            "job_title":   ("Job Title / Designation",   all_c, "👥 HR"),
-            "hire_date":   ("Hire / Joining Date",       dt_c,  "👥 HR"),
-            "performance": ("Performance Rating",        all_c, "👥 HR"),
-            "education":   ("Education Level",           all_c, "👥 HR"),
-            "employee_id": ("Employee ID",               all_c, "👥 HR"),
-            "employee_name":("Employee Name",            all_c, "👥 HR"),
-            # ── Marketing ────────────────────────────────────────────────
-            "spend":       ("Ad Spend / Marketing Cost", num_c, "📣 Marketing"),
-            "revenue":     ("Campaign Revenue",          num_c, "📣 Marketing"),
-            "channel":     ("Marketing Channel",         all_c, "📣 Marketing"),
-            "impressions": ("Impressions / Views",       num_c, "📣 Marketing"),
-            "clicks":      ("Clicks",                    num_c, "📣 Marketing"),
-            "conversions": ("Conversions / Leads",       num_c, "📣 Marketing"),
-            "roi":         ("ROI / ROAS",                num_c, "📣 Marketing"),
-            "demography":  ("Demography / Age Group",    all_c, "📣 Marketing"),
-            "campaign_id": ("Campaign ID",               all_c, "📣 Marketing"),
-            # ── Ecommerce / Retail ────────────────────────────────────────
-            "store":       ("Store / Branch Name",       all_c, "🏪 Retail"),
-            "payment":     ("Payment Method",            all_c, "🏪 Retail"),
-            "delivery":    ("Delivery / Shipping Days",  num_c, "🏪 Retail"),
-            "returns":     ("Returns / Refund Status",   all_c, "🏪 Retail"),
-            "satisfaction":("Satisfaction / Rating",     num_c, "🏪 Retail"),
+            # Sales & Revenue
+            "sales":        ("Revenue / Sales Amount",    num_c, "💼 Sales & Revenue"),
+            "profit":       ("Profit / Net Income",       num_c, "💼 Sales & Revenue"),
+            "quantity":     ("Quantity / Units Sold",     num_c, "💼 Sales & Revenue"),
+            "discount":     ("Discount / Promo Amount",   num_c, "💼 Sales & Revenue"),
+            "price":        ("Unit Price",                num_c, "💼 Sales & Revenue"),
+            "cost":         ("Unit Cost / COGS",          num_c, "💼 Sales & Revenue"),
+            # Dimensions
+            "date":         ("Date / Transaction Date",   dt_c,  "📅 Dimensions"),
+            "product":      ("Product Name",              all_c, "📅 Dimensions"),
+            "category":     ("Category / Product Group",  all_c, "📅 Dimensions"),
+            "sub_category": ("Sub-Category",              all_c, "📅 Dimensions"),
+            "region":       ("Region / Territory",        all_c, "📅 Dimensions"),
+            "city":         ("City",                      all_c, "📅 Dimensions"),
+            "state":        ("State / Province",          all_c, "📅 Dimensions"),
+            "country":      ("Country",                   all_c, "📅 Dimensions"),
+            "customer":     ("Customer Name / ID",        all_c, "📅 Dimensions"),
+            "segment":      ("Customer Segment",          all_c, "📅 Dimensions"),
+            "ship_mode":    ("Shipping Mode",             all_c, "📅 Dimensions"),
+            "order_id":     ("Order ID",                  all_c, "📅 Dimensions"),
+            # HR
+            "salary":       ("Salary / Compensation",     num_c, "👥 HR"),
+            "department":   ("Department / Division",     all_c, "👥 HR"),
+            "gender":       ("Gender",                    all_c, "👥 HR"),
+            "age":          ("Age",                       num_c, "👥 HR"),
+            "age_group":    ("Age Group / Band",          all_c, "👥 HR"),
+            "tenure":       ("Tenure / Years of Service", num_c, "👥 HR"),
+            "attrition":    ("Attrition / Left Company",  all_c, "👥 HR"),
+            "job_title":    ("Job Title / Designation",   all_c, "👥 HR"),
+            "hire_date":    ("Hire / Joining Date",       dt_c,  "👥 HR"),
+            "performance":  ("Performance Rating",        all_c, "👥 HR"),
+            "education":    ("Education Level",           all_c, "👥 HR"),
+            "employee_id":  ("Employee ID",               all_c, "👥 HR"),
+            "employee_name":("Employee Name",             all_c, "👥 HR"),
+            # Marketing
+            "spend":        ("Ad Spend / Marketing Cost", num_c, "📣 Marketing"),
+            "revenue":      ("Campaign Revenue",          num_c, "📣 Marketing"),
+            "channel":      ("Marketing Channel",         all_c, "📣 Marketing"),
+            "impressions":  ("Impressions / Views",       num_c, "📣 Marketing"),
+            "clicks":       ("Clicks",                    num_c, "📣 Marketing"),
+            "conversions":  ("Conversions / Leads",       num_c, "📣 Marketing"),
+            "roi":          ("ROI / ROAS",                num_c, "📣 Marketing"),
+            "demography":   ("Demography / Age Group",    all_c, "📣 Marketing"),
+            "campaign_id":  ("Campaign ID",               all_c, "📣 Marketing"),
+            # Retail / Ecommerce
+            "store":        ("Store / Branch Name",       all_c, "🏪 Retail"),
+            "payment":      ("Payment Method",            all_c, "🏪 Retail"),
+            "delivery":     ("Delivery / Shipping Days",  num_c, "🏪 Retail"),
+            "returns":      ("Returns / Refund Status",   all_c, "🏪 Retail"),
+            "satisfaction": ("Satisfaction / Rating",     num_c, "🏪 Retail"),
             "distribution_channel":("Distribution Channel", all_c, "🏪 Retail"),
-            # ── Fraud ────────────────────────────────────────────────────
-            "fraud_label":  ("Fraud Label / Class",          all_c, "🚨 Fraud"),
-            "fraud_amount": ("Transaction Amount",           num_c, "🚨 Fraud"),
-            "fraud_time":   ("Transaction Time / Date",      dt_c,  "🚨 Fraud"),
-            "fraud_type":   ("Transaction / Fraud Type",     all_c, "🚨 Fraud"),
-            "fraud_id":     ("Transaction ID",               all_c, "🚨 Fraud"),
-            "fraud_channel":("Channel / Device",             all_c, "🚨 Fraud"),
-            "fraud_loc":    ("Location / Merchant",          all_c, "🚨 Fraud"),
-            "fraud_score":  ("Risk Score / Anomaly Score",   num_c, "🚨 Fraud"),
+            # Fraud
+            "fraud_label":  ("Fraud Label / Class",       all_c, "🚨 Fraud"),
+            "fraud_amount": ("Transaction Amount",        num_c, "🚨 Fraud"),
+            "fraud_time":   ("Transaction Time / Date",   dt_c,  "🚨 Fraud"),
+            "fraud_type":   ("Transaction / Fraud Type",  all_c, "🚨 Fraud"),
+            "fraud_id":     ("Transaction ID",            all_c, "🚨 Fraud"),
+            "fraud_channel":("Channel / Device",          all_c, "🚨 Fraud"),
+            "fraud_loc":    ("Location / Merchant",       all_c, "🚨 Fraud"),
+            "fraud_score":  ("Risk Score / Anomaly Score",num_c, "🚨 Fraud"),
         }
 
-        # Which sections are relevant per domain
         DOMAIN_SECTIONS = {
             "Sales":     ["💼 Sales & Revenue", "📅 Dimensions"],
             "Marketing": ["📣 Marketing",        "📅 Dimensions", "💼 Sales & Revenue"],
             "HR":        ["👥 HR",               "📅 Dimensions"],
             "Ecommerce": ["💼 Sales & Revenue",  "📅 Dimensions", "🏪 Retail"],
             "Retail":    ["💼 Sales & Revenue",  "📅 Dimensions", "🏪 Retail"],
-            "Fraud":     ["🚨 Fraud", "💼 Sales & Revenue",  "📅 Dimensions"],
+            "Fraud":     ["🚨 Fraud",            "💼 Sales & Revenue", "📅 Dimensions"],
             "Generic":   ["💼 Sales & Revenue",  "📅 Dimensions", "👥 HR",
                           "📣 Marketing",        "🏪 Retail"],
         }
-        active_sections = DOMAIN_SECTIONS.get(domain,
-            list(dict.fromkeys(s for _,(_,_,s) in KEY_CATALOGUE.items())))
+        active_secs = DOMAIN_SECTIONS.get(domain, list(KEY_CATALOGUE.keys()))
 
-        # Group keys by section
-        sections = {}
-        for key,(lbl,opts,sec) in KEY_CATALOGUE.items():
-            sections.setdefault(sec, []).append((key, lbl, opts))
+        # ── Step 1: Deduplicate found — each dataset column → at most ONE key
+        # Priority = order keys appear in KEY_CATALOGUE
+        col_claimed = {}
+        for _key in list(KEY_CATALOGUE.keys()):
+            _col = found.get(_key)
+            if _col and _col != NONE:
+                if _col not in col_claimed:
+                    col_claimed[_col] = _key
+                else:
+                    # Already claimed by higher-priority key → clear this one
+                    del found[_key]
 
-        # Render active sections — each section in its own expander
-        # Each key gets its own full-width row to avoid Streamlit column nesting bugs
-        all_sec_names = list(sections.keys())
-        for sec_name in all_sec_names:
-            sec_keys = sections[sec_name]
-            is_active = sec_name in active_sections
-            badge = "" if is_active else " — not used for this domain"
-            with st.expander(f"{sec_name}{badge}", expanded=is_active):
-                if not is_active:
-                    st.caption("Not used for this domain — map manually if needed.")
-                for (key, lbl, opts) in sec_keys:
-                    cur      = found.get(key, NONE)
-                    safe_cur = cur if cur in opts else NONE
-                    idx      = opts.index(safe_cur)
-                    disabled = (not is_active and safe_cur == NONE)
-                    chosen = st.selectbox(
-                        lbl,
-                        opts,
-                        index=idx,
-                        key=f"ov_{key}",
-                        disabled=disabled,
-                        help=(f"Auto-detected: {cur}" if cur != NONE
-                              else "Not detected — select manually if needed"),
-                    )
-                    if chosen != NONE:
-                        found[key] = chosen
-                    elif key in found:
-                        del found[key]
+        # ── Step 2: Group keys by section
+        by_section = {}
+        for k,(lbl,opts,sec) in KEY_CATALOGUE.items():
+            by_section.setdefault(sec,[]).append((k,lbl,opts))
 
-        # ── Duplicate Warning ─────────────────────────────────────────────
+        # ── Step 3: Render — one dropdown per row (no st.columns nesting)
+        for sec_name, sec_items in by_section.items():
+            is_active = sec_name in active_secs
+            color     = "#00d4ff" if is_active else "#475569"
+            inactive_note = (
+                "  <span style='font-weight:400;color:#475569;font-size:.8rem'>"
+                "— not used for this domain</span>" if not is_active else "")
+            st.markdown(
+                f"<p style='font-weight:700;color:{color};"
+                f"margin:18px 0 4px 0;font-size:.92rem'>"
+                f"{sec_name}{inactive_note}</p>",
+                unsafe_allow_html=True)
+            if not is_active:
+                st.caption("Not active for this domain. Set manually if needed.")
+
+            for (k, lbl, opts) in sec_items:
+                cur      = found.get(k, NONE)
+                safe_cur = cur if cur in opts else NONE
+                disabled = (not is_active and safe_cur == NONE)
+                chosen   = st.selectbox(
+                    label   = lbl,
+                    options = opts,
+                    index   = opts.index(safe_cur),
+                    key     = f"cm_{k}",
+                    disabled= disabled,
+                    help    = (f"Auto-detected: {cur}" if cur != NONE
+                               else "Not auto-detected — select manually if needed"),
+                )
+                # Update found AND enforce no-duplicate on user changes
+                if chosen != NONE:
+                    # If this col was claimed by another key, release it first
+                    old_owner = col_claimed.get(chosen)
+                    if old_owner and old_owner != k and old_owner in found:
+                        del found[old_owner]
+                    col_claimed[chosen] = k
+                    found[k] = chosen
+                elif k in found:
+                    del found[k]
+                    if cur in col_claimed and col_claimed[cur] == k:
+                        del col_claimed[cur]
+
+        # ── Duplicate Warning ──────────────────────────────────────────────
         st.markdown("---")
         col_usage = {}
         for k, v in found.items():
             col_usage.setdefault(v, []).append(k)
-        dupes = {col: keys for col, keys in col_usage.items() if len(keys) > 1}
+        dupes = {c: ks for c, ks in col_usage.items() if len(ks) > 1}
         if dupes:
-            dupe_lines = [f"- **{dcol}** mapped to keys: {', '.join(dkeys)}" for dcol,dkeys in dupes.items()]
-            st.warning("Duplicate mapping detected — same dataset column assigned to multiple keys. Please fix above.\n" + "\n".join(dupe_lines))
+            dupe_lines = [f"- **{dc}** → {', '.join(dks)}" for dc,dks in dupes.items()]
+            st.warning("Duplicate mapping — same column used for multiple keys:\n"
+                       + "\n".join(dupe_lines))
 
-        # ── Summary Table ──────────────────────────────────────────────────
-        st.markdown("**✅ Active Mappings (auto-detected + your overrides):**")
+        # ── Active mappings summary ────────────────────────────────────────
+        st.markdown("**✅ Active Mappings:**")
         if found:
-            rows = []
-            for k, v in sorted(found.items()):
-                dtype = str(df[v].dtype)
-                sample = str(df[v].dropna().iloc[0]) if len(df[v].dropna()) > 0 else ""
-                rows.append({"Mapping Key": k, "Dataset Column": v,
-                             "Type": dtype, "Sample Value": sample[:40]})
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-        else:
-            st.info("No columns mapped yet.")
-
-        # ── All Columns Reference ─────────────────────────────────────────
-        with st.expander("📋 View all dataset columns", expanded=False):
-            td = pd.DataFrame({
-                "Column":       df.columns,
-                "Type":         [str(df[c].dtype) for c in df.columns],
-                "Non-Null %":   [f"{df[c].notna().mean()*100:.0f}%" for c in df.columns],
-                "Unique Values":[f"{df[c].nunique():,}" for c in df.columns],
-                "Sample":       [str(df[c].dropna().iloc[0])[:40] if len(df[c].dropna())>0 else "" for c in df.columns],
-            })
+            td = pd.DataFrame([{"Key": k, "→ Dataset Column": v}
+                                for k,v in sorted(found.items())])
             st.dataframe(td, use_container_width=True, hide_index=True)
 
     with st.expander("🔍 Preview Raw Data"):
