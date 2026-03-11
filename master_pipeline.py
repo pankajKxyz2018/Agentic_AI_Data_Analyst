@@ -5102,7 +5102,7 @@ def main():
             sections.setdefault(sec, []).append((key, lbl, opts))
 
         # Render active sections — each section in its own expander
-        # Items laid out 3 per row using explicit row containers
+        # Each key gets its own full-width row to avoid Streamlit column nesting bugs
         all_sec_names = list(sections.keys())
         for sec_name in all_sec_names:
             sec_keys = sections[sec_name]
@@ -5111,30 +5111,24 @@ def main():
             with st.expander(f"{sec_name}{badge}", expanded=is_active):
                 if not is_active:
                     st.caption("Not used for this domain — map manually if needed.")
-
-                # Split into chunks of 3 — each chunk gets its own st.columns(3) row
-                chunks = [sec_keys[i:i+3] for i in range(0, len(sec_keys), 3)]
-                for chunk in chunks:
-                    row_cols = st.columns(3)
-                    for col_idx, (key, lbl, opts) in enumerate(chunk):
-                        cur      = found.get(key, NONE)
-                        safe_cur = cur if cur in opts else NONE
-                        idx      = opts.index(safe_cur)
-                        disabled = (not is_active and safe_cur == NONE)
-                        with row_cols[col_idx]:
-                            chosen = st.selectbox(
-                                lbl,
-                                opts,
-                                index=idx,
-                                key=f"ov_{key}",
-                                disabled=disabled,
-                                help=(f"Auto-detected: {cur}" if cur != NONE
-                                      else "Not detected — select manually if needed"),
-                            )
-                        if chosen != NONE:
-                            found[key] = chosen
-                        elif key in found:
-                            del found[key]
+                for (key, lbl, opts) in sec_keys:
+                    cur      = found.get(key, NONE)
+                    safe_cur = cur if cur in opts else NONE
+                    idx      = opts.index(safe_cur)
+                    disabled = (not is_active and safe_cur == NONE)
+                    chosen = st.selectbox(
+                        lbl,
+                        opts,
+                        index=idx,
+                        key=f"ov_{key}",
+                        disabled=disabled,
+                        help=(f"Auto-detected: {cur}" if cur != NONE
+                              else "Not detected — select manually if needed"),
+                    )
+                    if chosen != NONE:
+                        found[key] = chosen
+                    elif key in found:
+                        del found[key]
 
         # ── Duplicate Warning ─────────────────────────────────────────────
         st.markdown("---")
