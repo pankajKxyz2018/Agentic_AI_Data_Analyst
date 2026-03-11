@@ -27,7 +27,6 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import dask.dataframe as dd
 import chardet
 
 # ─── Global Currency & Locale Utilities ───────────────────────────────────────
@@ -146,8 +145,8 @@ def query_llm(prompt):
         import cohere
         return cohere.Client(os.getenv("COHERE_API_KEY")).chat(model="command-r",message=prompt).text
     else:
-        from transformers import pipeline
-        return pipeline("text-generation",model="sshleifer/tiny-gpt2")(prompt,max_new_tokens=200)[0]["generated_text"]
+        # No LLM API key configured — return a simple rule-based response
+        return f"Analysis note: {prompt[:200]}... (Set ANTHROPIC_API_KEY or OPENAI_API_KEY in Streamlit secrets for AI-powered insights.)" 
 
 # ─── Loader ───────────────────────────────────────────────────────────────────
 def load_data(uploaded_file):
@@ -162,7 +161,8 @@ def load_data(uploaded_file):
                 with tempfile.NamedTemporaryFile(delete=False,suffix=".csv") as t:
                     t.write(raw); tp=t.name
                 try:
-                    df = dd.read_csv(tp,encoding=enc,assume_missing=True,dtype="object").compute()
+                    import dask.dataframe as _dd
+                    df = _dd.read_csv(tp,encoding=enc,assume_missing=True,dtype="object").compute()
                     for c in df.columns:
                         df[c] = pd.to_numeric(df[c],errors="ignore")
                 finally:
