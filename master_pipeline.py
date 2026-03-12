@@ -172,7 +172,12 @@ def load_data(uploaded_file):
             return pd.read_csv(io.BytesIO(raw),encoding=enc,low_memory=False)
         elif fname.endswith((".xlsx",".xls")): return pd.read_excel(io.BytesIO(raw))
         elif fname.endswith(".xml"):           return pd.read_xml(io.BytesIO(raw))
-        elif fname.endswith((".html",".htm")): return pd.read_html(io.BytesIO(raw))[0]
+        elif fname.endswith((".html",".htm")):
+            try:
+                return pd.read_html(io.BytesIO(raw))[0]
+            except Exception:
+                # lxml not available, try with html5lib
+                return pd.read_html(io.BytesIO(raw), flavor="html5lib")[0]
         elif fname.endswith(".pdf"):
             # pdfplumber — pure Python, no Java needed, works on Streamlit Cloud
             import pdfplumber, re
