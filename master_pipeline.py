@@ -158,15 +158,16 @@ def load_data(uploaded_file):
             enc = chardet.detect(raw).get("encoding") or "utf-8"
             if enc.lower() in ["ascii","utf-8","utf8"]: enc="utf-8"
             if size_mb > 100:
-                with tempfile.NamedTemporaryFile(delete=False,suffix=".csv") as t:
-                    t.write(raw); tp=t.name
-                try:
-                    import dask.dataframe as _dd
-                    df = _dd.read_csv(tp,encoding=enc,assume_missing=True,dtype="object").compute()
-                    for c in df.columns:
-                        df[c] = pd.to_numeric(df[c],errors="ignore")
-                finally:
-                    os.unlink(tp)
+                # Large file: use pandas chunked read (no dask dependency needed)
+                chunks = []
+                for chunk in pd.read_csv(
+                    io.BytesIO(raw), encoding=enc, dtype="object",
+                    chunksize=50000, on_bad_lines="skip"
+                ):
+                    chunks.append(chunk)
+                df = pd.concat(chunks, ignore_index=True)
+                for c in df.columns:
+                    df[c] = pd.to_numeric(df[c], errors="ignore")
                 return df
             return pd.read_csv(io.BytesIO(raw),encoding=enc,low_memory=False)
         elif fname.endswith((".xlsx",".xls")): return pd.read_excel(io.BytesIO(raw))
@@ -1823,6 +1824,970 @@ def render_generic(df, found):
 # ══════════════════════════════════════════════════════════════════════════════
 #  EXECUTIVE SUMMARY
 # ══════════════════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
+#  ENGINE 0 — 1 CLICK STORY  ⚡  Your Business Intelligence Team
+#  "Anyone Can Do Data Analysis — No Coding. No Training. Just Upload."
+#  Complete AI narrative: KPI Headline → Critical Alerts → Trend Story →
+#  Domain Scorecard → Wins & Risks → AI Insight → Monday Morning Actions
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def render_one_click_story(df, found, domain):
+    """
+    ENGINE 0 — 1 Click Story | Your Business Intelligence Team
+    Tagline: Anyone Can Do Data Analysis — No Coding. No Training. Just Upload.
+    Sections:
+      0. Dual tagline hero banner
+      1. Headline KPI card
+      2. Domain Scorecard (4 mini KPIs)
+      3. Critical Alerts
+      4. Performance Story (trend narrative)
+      5. Wins & Risks (side by side)
+      6. AI-Powered Insight (Claude narrative paragraph)
+      7. Monday Morning Actions
+      8. Footer with branding
+    """
+    import datetime
+
+    ac   = DOMAIN_COLOR.get(domain, C["blue"])
+    cur  = detect_currency(df)
+    cl   = {c.lower().strip(): c for c in df.columns}
+
+    sc   = found.get("sales");     pc   = found.get("profit")
+    dc   = found.get("date");      prd  = found.get("product")
+    cat  = found.get("category");  reg  = found.get("region")
+    cus  = found.get("customer");  qty  = found.get("quantity")
+    dis  = found.get("discount");  sal  = found.get("salary")
+    attr = found.get("attrition"); dept = found.get("department")
+    gen  = found.get("gender");    ten  = found.get("tenure")
+    imp  = found.get("impressions"); clk = found.get("clicks")
+    conv = found.get("conversions"); sp  = found.get("spend")
+    store= found.get("store");     pay  = found.get("payment")
+    perf = found.get("performance"); jt  = found.get("job_title")
+    emp  = found.get("employee_id") or found.get("employee_name")
+    tgt  = found.get("target");    srep = found.get("sales_rep")
+    vend = found.get("vendor");    roi  = found.get("roi")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 0 — DUAL TAGLINE HERO BANNER
+    # ══════════════════════════════════════════════════════════════════════
+    domain_icons = {
+        "Sales":"💼","Marketing":"📣","HR":"👥",
+        "Ecommerce":"🛒","Retail":"🏪","Fraud":"🚨","Generic":"🔍"
+    }
+    d_icon = domain_icons.get(domain, "📊")
+
+    st.markdown(f"""
+    <div style="background:linear-gradient(135deg,#020817,#0a1628,#0d1f3c);
+                border:1px solid {ac}44;border-radius:20px;
+                padding:32px 36px 24px;margin-bottom:16px;position:relative;overflow:hidden;">
+        <!-- Glow orb -->
+        <div style="position:absolute;top:-40px;right:-40px;width:200px;height:200px;
+                    background:radial-gradient({ac}18,transparent 70%);border-radius:50%;"></div>
+        <!-- Top badge row -->
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+            <span style="font-size:1.4rem;">⚡</span>
+            <span style="font-family:'Syne',sans-serif;font-size:1.55rem;
+                         font-weight:800;color:#f1f5f9;letter-spacing:-.02em;">
+                1 Click Story
+            </span>
+            <span style="background:{ac}22;color:{ac};border:1px solid {ac}55;
+                         border-radius:20px;padding:3px 14px;font-size:.7rem;
+                         font-weight:700;letter-spacing:.1em;text-transform:uppercase;">
+                {d_icon} {domain} Domain
+            </span>
+        </div>
+        <!-- PRIMARY tagline -->
+        <div style="font-family:'Syne',sans-serif;font-size:1.2rem;font-weight:800;
+                    color:#e2e8f0;margin-bottom:8px;letter-spacing:-.01em;">
+            Anyone Can Do Data Analysis —
+            <span style="color:{ac};">No Coding. No Training. Just Upload.</span>
+        </div>
+        <!-- SECONDARY tagline — BI Team -->
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;
+                    background:{ac}0d;border:1px solid {ac}22;border-radius:10px;
+                    padding:10px 16px;">
+            <div style="font-size:1.4rem;">🤝</div>
+            <div>
+                <div style="font-weight:700;color:#e2e8f0;font-size:.92rem;">
+                    Your Business Intelligence Team
+                </div>
+                <div style="color:#64748b;font-size:.78rem;margin-top:2px;">
+                    What a 5-person analyst team takes 3 days to produce — delivered in seconds.
+                    No PowerBI licence. No Tableau training. No data engineer needed.
+                </div>
+            </div>
+        </div>
+        <!-- Stats row -->
+        <div style="display:flex;gap:20px;flex-wrap:wrap;">
+            <span style="background:#ffffff0a;border-radius:8px;padding:5px 14px;
+                         font-size:.8rem;color:#94a3b8;">
+                📊 <strong style="color:#e2e8f0;">{len(df):,}</strong> records
+            </span>
+            <span style="background:#ffffff0a;border-radius:8px;padding:5px 14px;
+                         font-size:.8rem;color:#94a3b8;">
+                🗂 <strong style="color:#e2e8f0;">{len(df.columns)}</strong> columns
+            </span>
+            <span style="background:#ffffff0a;border-radius:8px;padding:5px 14px;
+                         font-size:.8rem;color:#94a3b8;">
+                🕐 <strong style="color:#e2e8f0;">
+                {datetime.datetime.now().strftime("%d %b %Y %H:%M")}</strong>
+            </span>
+            <span style="background:{ac}18;border:1px solid {ac}33;border-radius:8px;
+                         padding:5px 14px;font-size:.8rem;color:{ac};font-weight:600;">
+                ✅ Auto-analysed — no setup required
+            </span>
+        </div>
+    </div>""", unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 1 — HEADLINE KPI CARD
+    # ══════════════════════════════════════════════════════════════════════
+    headline_val = headline_label = headline_sub = delta_str = delta_color = ""
+
+    try:
+        if domain == "HR" and sal:
+            s = pd.to_numeric(df[sal], errors="coerce").dropna()
+            headline_val   = f"{cur}{s.sum():,.0f}"
+            headline_label = "Total Payroll Cost"
+            headline_sub   = f"Avg {cur}{s.mean():,.0f} per employee · {len(df):,} headcount"
+            if attr:
+                rate = df[attr].astype(str).str.lower().isin(
+                    ["yes","true","1","resigned","terminated","left"]).mean()*100
+                delta_str   = f"↑ {rate:.1f}% Attrition Rate"
+                delta_color = "#ef4444" if rate > 15 else "#f59e0b"
+        elif domain == "Fraud":
+            fraud_cols = ["class","label","fraud","is_fraud","isfraud","target","fraud_label"]
+            cc = next((cl[c] for c in fraud_cols if c in cl), None)
+            if cc:
+                lbl = df[cc].astype(str).str.lower().map(
+                    lambda x: 1 if x in ["1","true","yes","fraud"] else 0)
+                rate = lbl.mean()*100
+                headline_val   = f"{rate:.4f}%"
+                headline_label = "Fraud Rate"
+                headline_sub   = f"{int(lbl.sum()):,} fraudulent of {len(df):,} transactions"
+                delta_str   = "🚨 Critical — investigate immediately" if rate > 1 else "✅ Within normal range"
+                delta_color = "#ef4444" if rate > 1 else "#10b981"
+        elif domain == "Marketing" and sp:
+            sp_s = pd.to_numeric(df[sp], errors="coerce").dropna()
+            headline_val   = f"{cur}{sp_s.sum():,.0f}"
+            headline_label = "Total Marketing Spend"
+            rev_s = found.get("revenue")
+            if rev_s:
+                rv = pd.to_numeric(df[rev_s], errors="coerce").sum()
+                roi_val = (rv - sp_s.sum()) / sp_s.sum() * 100 if sp_s.sum() > 0 else 0
+                headline_sub = f"ROI: {roi_val:+.1f}% · {cur}{rv:,.0f} attributed revenue"
+                delta_str   = f"{'↑' if roi_val>0 else '↓'} {abs(roi_val):.1f}% Return on Spend"
+                delta_color = "#10b981" if roi_val > 0 else "#ef4444"
+            elif conv:
+                cv = pd.to_numeric(df[conv], errors="coerce").sum()
+                cpa = sp_s.sum() / cv if cv > 0 else 0
+                headline_sub = f"Cost per Conversion: {cur}{cpa:,.2f} · {len(df):,} campaigns"
+                delta_str   = f"{cur}{cpa:,.2f} CPA"
+                delta_color = "#10b981" if cpa < 500 else "#f59e0b"
+            else:
+                headline_sub = f"{len(df):,} campaigns analysed"
+        elif sc:
+            s = pd.to_numeric(df[sc], errors="coerce").dropna()
+            headline_val   = f"{cur}{s.sum():,.0f}"
+            headline_label = "Total Revenue"
+            headline_sub   = f"Avg {cur}{s.mean():,.0f} per transaction · {len(df):,} records"
+            if pc:
+                ps     = pd.to_numeric(df[pc], errors="coerce").dropna()
+                margin = ps.sum() / s.sum() * 100 if s.sum() > 0 else 0
+                delta_str   = f"{'↑' if margin > 0 else '↓'} {margin:.1f}% Profit Margin"
+                delta_color = "#10b981" if margin > 15 else "#f59e0b" if margin > 5 else "#ef4444"
+    except Exception:
+        pass
+
+    if headline_val:
+        st.markdown(f"""
+        <div style="background:linear-gradient(135deg,#0f172a,#111827);
+                    border:2px solid {ac}66;border-radius:16px;
+                    padding:28px 32px;margin:0 0 16px;text-align:center;">
+            <div style="color:#64748b;font-size:.75rem;font-weight:700;
+                        letter-spacing:.12em;text-transform:uppercase;
+                        margin-bottom:8px;">{headline_label}</div>
+            <div style="font-size:3.2rem;font-weight:800;color:{ac};
+                        letter-spacing:-.03em;line-height:1;
+                        font-family:'Syne',sans-serif;">{headline_val}</div>
+            <div style="color:#94a3b8;font-size:.88rem;margin-top:10px;">{headline_sub}</div>
+            {f'<div style="color:{delta_color};font-size:.9rem;font-weight:700;margin-top:10px;">{delta_str}</div>' if delta_str else ""}
+        </div>""", unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 2 — DOMAIN SCORECARD (4 smart mini-KPIs)
+    # ══════════════════════════════════════════════════════════════════════
+    mini_kpis = []
+
+    try:
+        # Always show record count and completeness
+        completeness = (1 - df.isnull().mean().mean()) * 100
+        mini_kpis.append(("📋", "Records", f"{len(df):,}", f"{completeness:.0f}% complete"))
+
+        if sc:
+            s = pd.to_numeric(df[sc], errors="coerce").dropna()
+            if dc:
+                dates = pd.to_datetime(df[dc], errors="coerce")
+                df2   = pd.DataFrame({"_r":s,"_d":dates}).dropna()
+                if len(df2) > 5:
+                    df2["_M"] = df2["_d"].dt.to_period("M")
+                    monthly   = df2.groupby("_M")["_r"].sum()
+                    if len(monthly) >= 2:
+                        chg = (monthly.iloc[-1]-monthly.iloc[-2])/monthly.iloc[-2]*100
+                        arrow = "▲" if chg > 0 else "▼"
+                        mini_kpis.append(("📈","MoM Growth",
+                            f"{arrow}{abs(chg):.1f}%",
+                            f"vs prior period"))
+            if pc:
+                ps  = pd.to_numeric(df[pc], errors="coerce").dropna()
+                mgn = ps.sum()/s.sum()*100 if s.sum()>0 else 0
+                mini_kpis.append(("💰","Profit Margin",
+                    f"{mgn:.1f}%",
+                    "Healthy >15%" if mgn>15 else "Low <15%"))
+            if qty:
+                q = pd.to_numeric(df[qty], errors="coerce").dropna()
+                mini_kpis.append(("📦","Avg Units/Order",
+                    f"{q.mean():.1f}",
+                    f"Total {q.sum():,.0f} units"))
+
+        if domain=="HR":
+            if sal:
+                s = pd.to_numeric(df[sal], errors="coerce").dropna()
+                mini_kpis.append(("💼","Avg Salary",
+                    f"{cur}{s.mean():,.0f}",f"Median {cur}{s.median():,.0f}"))
+            if attr:
+                rate = df[attr].astype(str).str.lower().isin(
+                    ["yes","true","1","resigned","terminated","left"]).mean()*100
+                mini_kpis.append(("🚪","Attrition",
+                    f"{rate:.1f}%",
+                    "Critical >20%" if rate>20 else "High >12%" if rate>12 else "Healthy"))
+            if dept:
+                mini_kpis.append(("🏢","Departments",
+                    f"{df[dept].nunique()}",f"{len(df):,} total employees"))
+
+        if domain=="Marketing":
+            if imp and clk:
+                i_s = pd.to_numeric(df[imp],errors="coerce").sum()
+                c_s = pd.to_numeric(df[clk],errors="coerce").sum()
+                ctr = c_s/i_s*100 if i_s>0 else 0
+                mini_kpis.append(("🎯","CTR",f"{ctr:.2f}%","Benchmark 2–3%"))
+            if conv:
+                cv = pd.to_numeric(df[conv],errors="coerce").sum()
+                mini_kpis.append(("✅","Conversions",f"{cv:,.0f}","Total leads/sales"))
+
+        if domain=="Fraud":
+            fraud_cols=["class","label","fraud","is_fraud","isfraud","target"]
+            cc=next((cl[c] for c in fraud_cols if c in cl),None)
+            if cc:
+                lbl=df[cc].astype(str).str.lower().map(lambda x:1 if x in["1","true","yes","fraud"] else 0)
+                mini_kpis.append(("🚨","Fraud Cases",f"{int(lbl.sum()):,}",f"{lbl.mean()*100:.4f}% rate"))
+
+    except Exception:
+        pass
+
+    if mini_kpis:
+        cols = st.columns(min(4, len(mini_kpis)))
+        for i, (icon, label, val, sub) in enumerate(mini_kpis[:4]):
+            with cols[i % 4]:
+                st.markdown(f"""
+                <div style="background:#0d1829;border:1px solid #1e293b;border-radius:12px;
+                            padding:16px;text-align:center;height:100%;">
+                    <div style="font-size:1.5rem;margin-bottom:6px;">{icon}</div>
+                    <div style="color:#64748b;font-size:.7rem;font-weight:600;
+                                letter-spacing:.08em;text-transform:uppercase;">{label}</div>
+                    <div style="font-size:1.5rem;font-weight:800;color:{ac};
+                                font-family:'Syne',sans-serif;margin:4px 0;">{val}</div>
+                    <div style="color:#475569;font-size:.72rem;">{sub}</div>
+                </div>""", unsafe_allow_html=True)
+        st.markdown("<div style='margin-bottom:16px'></div>", unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 3 — CRITICAL ALERTS
+    # ══════════════════════════════════════════════════════════════════════
+    alerts = []
+
+    try:
+        # Revenue concentration risk
+        if sc and (prd or cat):
+            dim = prd or cat
+            grp = df.groupby(dim)[sc].apply(lambda x: pd.to_numeric(x,errors="coerce").sum()).sort_values(ascending=False)
+            top1_pct = grp.iloc[0]/grp.sum()*100 if len(grp)>0 else 0
+            if top1_pct > 40:
+                alerts.append(("critical","🔴",
+                    f"Revenue Concentration Risk — {grp.index[0]}",
+                    f"{top1_pct:.0f}% of total revenue from one {'product' if dim==prd else 'category'}. "
+                    f"Single point of failure — diversify immediately."))
+
+        # Attrition
+        if attr:
+            rate = df[attr].astype(str).str.lower().isin(
+                ["yes","true","1","resigned","terminated","left"]).mean()*100
+            if rate > 20:
+                alerts.append(("critical","🔴",
+                    f"Critical Attrition — {rate:.1f}% employees left",
+                    f"Industry benchmark 10–15%. You are {rate/15:.1f}x the norm. Immediate intervention needed."))
+            elif rate > 12:
+                alerts.append(("warning","🟡",
+                    f"Elevated Attrition — {rate:.1f}%",
+                    "Above healthy 10% threshold. Review exit data and engagement scores."))
+
+        # Gender pay gap
+        if gen and sal:
+            dg = df.copy()
+            dg["_g"] = normalize_gender(dg[gen])
+            ms = pd.to_numeric(dg[dg["_g"]=="Male"][sal],errors="coerce").mean()
+            fs = pd.to_numeric(dg[dg["_g"]=="Female"][sal],errors="coerce").mean()
+            if ms>0 and fs>0:
+                gap=(ms-fs)/ms*100
+                if abs(gap)>15:
+                    alerts.append(("critical","🔴",
+                        f"Gender Pay Gap — {abs(gap):.1f}%",
+                        f"{'Male' if gap>0 else 'Female'} employees earn {abs(gap):.1f}% more. "
+                        "Legal and reputational risk. Audit compensation bands now."))
+                elif abs(gap)>8:
+                    alerts.append(("warning","🟡",
+                        f"Gender Pay Gap — {abs(gap):.1f}%",
+                        "Noticeable disparity. Review pay bands across departments."))
+
+        # Discount erosion
+        if dis and sc:
+            disc_s = pd.to_numeric(df[dis],errors="coerce")
+            rev_s  = pd.to_numeric(df[sc], errors="coerce")
+            ratio  = disc_s.sum()/(disc_s.sum()+rev_s.sum())*100
+            if ratio>25:
+                alerts.append(("critical","🔴",
+                    f"Discount Erosion — {ratio:.1f}% of gross revenue discounted",
+                    f"Giving away {cur}{disc_s.sum():,.0f}. Implement approval gates."))
+            elif ratio>15:
+                alerts.append(("warning","🟡",
+                    f"High Discount Rate — {ratio:.1f}%",
+                    "Above healthy 15% threshold. Monitor closely."))
+
+        # Low CTR
+        if imp and clk:
+            i_s=pd.to_numeric(df[imp],errors="coerce").sum()
+            c_s=pd.to_numeric(df[clk],errors="coerce").sum()
+            ctr=c_s/i_s*100 if i_s>0 else 0
+            if ctr<1.0:
+                alerts.append(("warning","🟡",
+                    f"Low CTR — {ctr:.2f}% (benchmark: 2–3%)",
+                    f"Creative refresh or audience retargeting needed. "
+                    f"{i_s:,.0f} impressions → only {c_s:,.0f} clicks."))
+
+        # Low profit margin
+        if sc and pc:
+            rv=pd.to_numeric(df[sc],errors="coerce").sum()
+            pr=pd.to_numeric(df[pc],errors="coerce").sum()
+            mgn=pr/rv*100 if rv>0 else 0
+            if mgn<5:
+                alerts.append(("critical","🔴",
+                    f"Critical Margin — {mgn:.1f}%",
+                    "Dangerously thin. Review COGS, pricing, and operations urgently."))
+            elif mgn<10:
+                alerts.append(("warning","🟡",
+                    f"Low Profit Margin — {mgn:.1f}%",
+                    "Below healthy 10–15% benchmark. Pricing or cost optimisation needed."))
+
+        # Target vs actual
+        if tgt and sc:
+            t_s = pd.to_numeric(df[tgt],errors="coerce").sum()
+            r_s = pd.to_numeric(df[sc], errors="coerce").sum()
+            ach = r_s/t_s*100 if t_s>0 else 0
+            if ach < 80:
+                alerts.append(("critical","🔴",
+                    f"Target Miss — {ach:.1f}% achieved",
+                    f"Actual {cur}{r_s:,.0f} vs Target {cur}{t_s:,.0f}. "
+                    f"Gap: {cur}{t_s-r_s:,.0f}. Investigate root cause."))
+            elif ach < 95:
+                alerts.append(("warning","🟡",
+                    f"Near Miss — {ach:.1f}% of target achieved",
+                    f"Gap of {cur}{t_s-r_s:,.0f} to close."))
+
+        # Data quality
+        null_pct=df.isnull().mean().mean()*100
+        if null_pct>20:
+            alerts.append(("warning","🟡",
+                f"Data Quality — {null_pct:.0f}% missing values",
+                "High missing data reduces accuracy. Review collection process."))
+
+    except Exception:
+        pass
+
+    st.markdown(f"""
+    <div style="font-family:'Syne',sans-serif;font-size:1rem;font-weight:700;
+                color:#f1f5f9;margin:20px 0 10px;display:flex;align-items:center;gap:8px;">
+        🚨 Critical Alerts
+        <span style="font-size:.75rem;font-weight:400;color:#64748b;">
+        — what needs attention right now</span>
+    </div>""", unsafe_allow_html=True)
+
+    if alerts:
+        for sev,icon,title,detail in alerts[:5]:
+            bg     = "#1a0a0a" if sev=="critical" else "#1a1400"
+            border = "#ef444466" if sev=="critical" else "#f59e0b66"
+            tc     = "#fca5a5" if sev=="critical" else "#fde68a"
+            st.markdown(f"""
+            <div style="background:{bg};border-left:4px solid {border};
+                        border-radius:0 10px 10px 0;padding:14px 18px;margin-bottom:8px;">
+                <div style="font-weight:700;color:{tc};font-size:.9rem;margin-bottom:3px;">
+                    {icon} {title}
+                </div>
+                <div style="color:#94a3b8;font-size:.83rem;line-height:1.5;">{detail}</div>
+            </div>""", unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style="background:#0a1f0f;border-left:4px solid #10b98166;
+                    border-radius:0 10px 10px 0;padding:14px 18px;margin-bottom:8px;">
+            <div style="font-weight:700;color:#6ee7b7;font-size:.9rem;">
+                ✅ No Critical Alerts — Data looks healthy
+            </div>
+            <div style="color:#94a3b8;font-size:.83rem;margin-top:3px;">
+                All key metrics are within acceptable thresholds.
+            </div>
+        </div>""", unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 4 — PERFORMANCE STORY
+    # ══════════════════════════════════════════════════════════════════════
+    story_lines = []
+
+    try:
+        if sc and dc:
+            rev_s = pd.to_numeric(df[sc],errors="coerce")
+            dates = pd.to_datetime(df[dc],errors="coerce")
+            df2   = pd.DataFrame({"_r":rev_s,"_d":dates}).dropna()
+            if len(df2)>10:
+                df2["_M"] = df2["_d"].dt.to_period("M")
+                monthly   = df2.groupby("_M")["_r"].sum().sort_index()
+                if len(monthly)>=2:
+                    last=monthly.iloc[-1]; prev=monthly.iloc[-2]
+                    chg=(last-prev)/prev*100 if prev!=0 else 0
+                    trend="📈 Up" if chg>0 else "📉 Down"
+                    story_lines.append(
+                        f"{trend} **{abs(chg):.1f}%** vs prior period — "
+                        f"Latest: **{cur}{last:,.0f}** | Prior: **{cur}{prev:,.0f}**")
+                if len(monthly)>=3:
+                    story_lines.append(
+                        f"🏆 Best month: **{monthly.idxmax()}** at **{cur}{monthly.max():,.0f}**")
+                if len(monthly)>=6:
+                    h1=monthly.iloc[:len(monthly)//2].mean()
+                    h2=monthly.iloc[len(monthly)//2:].mean()
+                    hc=(h2-h1)/h1*100 if h1!=0 else 0
+                    story_lines.append(
+                        f"📊 First-half avg: **{cur}{h1:,.0f}** → Second-half avg: **{cur}{h2:,.0f}** "
+                        f"({'▲' if hc>0 else '▼'}{abs(hc):.1f}% overall trend)")
+                if len(monthly)>=4:
+                    rolling=monthly.rolling(3).mean()
+                    slope=(rolling.iloc[-1]-rolling.iloc[-4]) if len(rolling)>=4 else 0
+                    if slope>0:
+                        story_lines.append("🚀 3-month rolling average shows **upward momentum**")
+                    elif slope<0:
+                        story_lines.append("⚠️ 3-month rolling average shows **declining momentum** — review strategy")
+
+        if reg and sc:
+            rg    = df.groupby(reg)[sc].apply(lambda x: pd.to_numeric(x,errors="coerce").sum())
+            rg_pct= rg/rg.sum()*100
+            story_lines.append(
+                f"🌍 Top region: **{rg.idxmax()}** ({rg_pct.max():.0f}% of revenue) · "
+                f"Lowest: **{rg.idxmin()}** ({rg_pct.min():.1f}%)")
+
+        if prd and sc:
+            pg    = df.groupby(prd)[sc].apply(lambda x: pd.to_numeric(x,errors="coerce").sum())
+            pct   = pg/pg.sum()*100
+            story_lines.append(
+                f"🥇 Top product: **{pg.idxmax()}** drives **{pct.max():.0f}%** of revenue · "
+                f"Weakest: **{pg.idxmin()}** ({pct.min():.1f}%)")
+
+        if cus and sc:
+            cg    = df.groupby(cus)[sc].apply(lambda x: pd.to_numeric(x,errors="coerce").sum())
+            top5  = cg.nlargest(5).sum()/cg.sum()*100
+            story_lines.append(
+                f"👥 Top 5 customers contribute **{top5:.0f}%** of revenue — "
+                f"{'⚠️ high dependency risk' if top5>60 else '✅ healthy diversification'}")
+
+        if dept and sal:
+            dg = df.groupby(dept)[sal].apply(lambda x: pd.to_numeric(x,errors="coerce").mean())
+            story_lines.append(
+                f"💼 Highest paid dept: **{dg.idxmax()}** ({cur}{dg.max():,.0f} avg) · "
+                f"Lowest: **{dg.idxmin()}** ({cur}{dg.min():,.0f} avg)")
+
+        if imp and clk and conv:
+            i_s=pd.to_numeric(df[imp],errors="coerce").sum()
+            c_s=pd.to_numeric(df[clk],errors="coerce").sum()
+            v_s=pd.to_numeric(df[conv],errors="coerce").sum()
+            ctr=c_s/i_s*100 if i_s>0 else 0
+            cvr=v_s/c_s*100 if c_s>0 else 0
+            story_lines.append(
+                f"📣 Funnel: **{i_s:,.0f}** impressions → **{c_s:,.0f}** clicks "
+                f"(CTR {ctr:.2f}%) → **{v_s:,.0f}** conversions (CVR {cvr:.2f}%)")
+
+        if srep and sc:
+            sg  = df.groupby(srep)[sc].apply(lambda x: pd.to_numeric(x,errors="coerce").sum())
+            story_lines.append(
+                f"🏅 Top sales rep: **{sg.idxmax()}** ({cur}{sg.max():,.0f}) · "
+                f"Lowest: **{sg.idxmin()}** ({cur}{sg.min():,.0f})")
+
+    except Exception:
+        pass
+
+    if story_lines:
+        st.markdown(f"""
+        <div style="font-family:'Syne',sans-serif;font-size:1rem;font-weight:700;
+                    color:#f1f5f9;margin:20px 0 10px;">
+            📖 Performance Story
+        </div>""", unsafe_allow_html=True)
+        for line in story_lines:
+            st.markdown(
+                f"<div style='background:#0d1829;border-left:3px solid {ac}44;"
+                f"border-radius:0 8px 8px 0;padding:10px 16px;margin-bottom:6px;"
+                f"color:#cbd5e1;font-size:.87rem;line-height:1.6;'>{line}</div>",
+                unsafe_allow_html=True)
+
+    # ── Trend sparkline chart (only if date + value exist) ─────────────────
+    try:
+        if sc and dc:
+            rev_s = pd.to_numeric(df[sc], errors="coerce")
+            dates = pd.to_datetime(df[dc], errors="coerce")
+            df_t  = pd.DataFrame({"_r": rev_s, "_d": dates}).dropna()
+            if len(df_t) > 10:
+                df_t["_M"] = df_t["_d"].dt.to_period("M")
+                monthly    = df_t.groupby("_M")["_r"].sum().reset_index()
+                monthly["_M_str"] = monthly["_M"].astype(str)
+                if len(monthly) >= 3:
+                    fig_trend = go.Figure()
+                    fig_trend.add_trace(go.Scatter(
+                        x=monthly["_M_str"], y=monthly["_r"],
+                        mode="lines+markers",
+                        line=dict(color=ac, width=2.5),
+                        marker=dict(size=6, color=ac),
+                        fill="tozeroy",
+                        fillcolor=f"{ac}18",
+                        name="Revenue",
+                        hovertemplate=f"<b>%{{x}}</b><br>{cur}%{{y:,.0f}}<extra></extra>"
+                    ))
+                    # Add 3-month rolling average
+                    if len(monthly) >= 4:
+                        monthly["_roll"] = monthly["_r"].rolling(3, min_periods=1).mean()
+                        fig_trend.add_trace(go.Scatter(
+                            x=monthly["_M_str"], y=monthly["_roll"],
+                            mode="lines", name="3M Avg",
+                            line=dict(color="#f59e0b", width=1.5, dash="dot"),
+                            hovertemplate="<b>%{x}</b><br>3M Avg: "+cur+"%{y:,.0f}<extra></extra>"
+                        ))
+                    fig_trend.update_layout(
+                        **cd(240),
+                        title=dict(text="📈 Revenue Trend — Monthly", font=dict(size=13,color="#e2e8f0")),
+                        showlegend=True,
+                        legend=dict(orientation="h", y=1.12, font=dict(size=11, color="#94a3b8")),
+                        xaxis=dict(showgrid=False, tickfont=dict(size=10, color="#64748b")),
+                        yaxis=dict(gridcolor="#1e293b", tickfont=dict(size=10, color="#64748b"),
+                                   tickprefix=cur),
+                    )
+                    st.plotly_chart(fig_trend, use_container_width=True)
+        elif sal and dept:
+            # HR — show dept salary chart
+            ds = df.groupby(dept)[sal].apply(
+                lambda x: pd.to_numeric(x, errors="coerce").mean()
+            ).sort_values(ascending=False).head(10).reset_index()
+            ds.columns = ["Department", "Avg Salary"]
+            fig_dept = px.bar(ds, x="Avg Salary", y="Department", orientation="h",
+                              color="Avg Salary", color_continuous_scale=["#1e3a5f", ac],
+                              labels={"Avg Salary": f"Avg Salary ({cur})"})
+            fig_dept.update_layout(**cd(280),
+                title=dict(text="💼 Avg Salary by Department", font=dict(size=13,color="#e2e8f0")),
+                showlegend=False, coloraxis_showscale=False,
+                xaxis=dict(tickprefix=cur, gridcolor="#1e293b",
+                           tickfont=dict(size=10,color="#64748b")),
+                yaxis=dict(tickfont=dict(size=10, color="#cbd5e1")))
+            st.plotly_chart(fig_dept, use_container_width=True)
+    except Exception:
+        pass
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 4.5 — DATA HEALTH SCORECARD (new — unique differentiator)
+    # ══════════════════════════════════════════════════════════════════════
+    try:
+        health_scores = []
+
+        # Completeness
+        completeness = (1 - df.isnull().mean().mean()) * 100
+        health_scores.append(("📋 Data Completeness",
+            completeness,
+            "100%" if completeness>=95 else f"{completeness:.0f}%",
+            "#10b981" if completeness>=90 else "#f59e0b" if completeness>=70 else "#ef4444"))
+
+        # Column coverage — how many expected columns found vs domain
+        domain_expected = {
+            "Sales":["sales","profit","date","product","region","customer"],
+            "Marketing":["spend","impressions","clicks","conversions","channel","campaign_id"],
+            "HR":["salary","department","attrition","tenure","performance","employee_id"],
+            "Ecommerce":["sales","product","payment","delivery","returns","customer"],
+            "Retail":["sales","store","product","category","payment","satisfaction"],
+            "Fraud":["fraud_label","fraud_amount","fraud_time","fraud_type"],
+            "Generic":["sales","date","product","region"],
+        }
+        expected = domain_expected.get(domain, [])
+        covered  = sum(1 for k in expected if found.get(k)) if expected else 0
+        cov_pct  = covered / len(expected) * 100 if expected else 100
+        health_scores.append(("🗂 Column Coverage",
+            cov_pct,
+            f"{covered}/{len(expected)} fields",
+            "#10b981" if cov_pct>=80 else "#f59e0b" if cov_pct>=50 else "#ef4444"))
+
+        # Numeric data quality
+        num_cols = df.select_dtypes(include="number").columns
+        if len(num_cols) > 0:
+            neg_flag = any((df[c] < 0).sum() > len(df)*0.1 for c in num_cols)
+            dup_pct  = df.duplicated().mean() * 100
+            quality  = 100 - (20 if neg_flag else 0) - min(dup_pct * 2, 30)
+            health_scores.append(("🔢 Data Quality",
+                quality,
+                "Good" if quality>=80 else "Fair" if quality>=60 else "Poor",
+                "#10b981" if quality>=80 else "#f59e0b" if quality>=60 else "#ef4444"))
+
+        # Analysis readiness
+        key_count = len([v for v in found.values() if v])
+        readiness = min(key_count / 5 * 100, 100)
+        health_scores.append(("⚡ Analysis Readiness",
+            readiness,
+            f"{key_count} mapped",
+            "#10b981" if readiness>=80 else "#f59e0b" if readiness>=50 else "#ef4444"))
+
+        if health_scores:
+            st.markdown(f"""
+            <div style="font-family:'Syne',sans-serif;font-size:1rem;font-weight:700;
+                        color:#f1f5f9;margin:20px 0 10px;">
+                📊 Data Health Scorecard
+                <span style="font-size:.75rem;font-weight:400;color:#64748b;">
+                — how analysis-ready is your data</span>
+            </div>""", unsafe_allow_html=True)
+
+            cols_h = st.columns(len(health_scores))
+            for i, (label, score, display, color) in enumerate(health_scores):
+                with cols_h[i]:
+                    st.markdown(f"""
+                    <div style="background:#0d1829;border:1px solid #1e293b;
+                                border-radius:12px;padding:16px 14px;text-align:center;">
+                        <div style="color:#64748b;font-size:.68rem;font-weight:600;
+                                    letter-spacing:.06em;text-transform:uppercase;
+                                    margin-bottom:8px;">{label}</div>
+                        <div style="font-size:1.4rem;font-weight:800;color:{color};
+                                    font-family:'Syne',sans-serif;">{display}</div>
+                        <div style="background:#1e293b;border-radius:20px;height:4px;
+                                    margin:10px 0 6px;overflow:hidden;">
+                            <div style="background:{color};height:4px;border-radius:20px;
+                                        width:{min(score,100):.0f}%;transition:width .5s;"></div>
+                        </div>
+                        <div style="color:#475569;font-size:.7rem;">{score:.0f}/100</div>
+                    </div>""", unsafe_allow_html=True)
+    except Exception:
+        pass
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 5 — WINS & RISKS
+    # ══════════════════════════════════════════════════════════════════════
+    wins=[]; risks=[]
+
+    try:
+        if sc and prd:
+            pg=df.groupby(prd)[sc].apply(lambda x: pd.to_numeric(x,errors="coerce").sum()).sort_values(ascending=False)
+            if len(pg)>=1: wins.append(f"🥇 **{pg.index[0]}** is top revenue driver ({cur}{pg.iloc[0]:,.0f})")
+            if len(pg)>=2: risks.append(f"⚠️ **{pg.index[-1]}** underperforming ({cur}{pg.iloc[-1]:,.0f})")
+
+        if reg and sc:
+            rg=df.groupby(reg)[sc].apply(lambda x: pd.to_numeric(x,errors="coerce").sum()).sort_values(ascending=False)
+            if len(rg)>=1: wins.append(f"🌍 **{rg.index[0]}** is strongest market ({cur}{rg.iloc[0]:,.0f})")
+            if len(rg)>=2: risks.append(f"📉 **{rg.index[-1]}** region needs attention ({cur}{rg.iloc[-1]:,.0f})")
+
+        if dept and attr:
+            da=df.copy()
+            da["_left"]=da[attr].astype(str).str.lower().isin(["yes","true","1","resigned","terminated","left"])
+            dept_attr=da.groupby(dept)["_left"].mean().sort_values(ascending=False)
+            if len(dept_attr)>=1 and dept_attr.iloc[0]>0.15:
+                risks.append(f"🔴 **{dept_attr.index[0]}** dept: {dept_attr.iloc[0]*100:.0f}% attrition")
+            if len(dept_attr)>=1 and dept_attr.iloc[-1]<0.05:
+                wins.append(f"✅ **{dept_attr.index[-1]}** dept: only {dept_attr.iloc[-1]*100:.0f}% attrition")
+
+        if sc and dc:
+            rev_s=pd.to_numeric(df[sc],errors="coerce")
+            dates=pd.to_datetime(df[dc],errors="coerce")
+            df2=pd.DataFrame({"_r":rev_s,"_d":dates}).dropna()
+            if len(df2)>10:
+                df2["_M"]=df2["_d"].dt.to_period("M")
+                monthly=df2.groupby("_M")["_r"].sum()
+                if len(monthly)>=3:
+                    if monthly.is_monotonic_increasing:
+                        wins.append("📈 Consistent month-over-month revenue growth")
+                    last3=(monthly.iloc[-1]-monthly.iloc[-3])/monthly.iloc[-3]*100
+                    if last3<-10:
+                        risks.append(f"📉 Revenue declined **{abs(last3):.0f}%** over last 3 periods")
+                    elif last3>20:
+                        wins.append(f"🚀 Revenue grew **{last3:.0f}%** over last 3 periods")
+
+        if sp and conv:
+            sp_s=pd.to_numeric(df[sp],errors="coerce").sum()
+            cv_s=pd.to_numeric(df[conv],errors="coerce").sum()
+            if sp_s>0 and cv_s>0:
+                cpa=sp_s/cv_s
+                if cpa<500: wins.append(f"💰 Efficient CPA: {cur}{cpa:,.2f} per conversion")
+                else: risks.append(f"💸 High CPA: {cur}{cpa:,.2f} — optimise campaigns")
+
+        if tgt and sc:
+            t_s=pd.to_numeric(df[tgt],errors="coerce").sum()
+            r_s=pd.to_numeric(df[sc], errors="coerce").sum()
+            ach=r_s/t_s*100 if t_s>0 else 0
+            if ach>=100: wins.append(f"🎯 Target exceeded! **{ach:.1f}%** of goal achieved")
+            elif ach<80: risks.append(f"🎯 Target miss: only **{ach:.1f}%** achieved")
+
+    except Exception:
+        pass
+
+    if wins or risks:
+        st.markdown(f"""
+        <div style="font-family:'Syne',sans-serif;font-size:1rem;font-weight:700;
+                    color:#f1f5f9;margin:20px 0 10px;">
+            🏆 Wins &amp; Risks
+        </div>""", unsafe_allow_html=True)
+        col_w,col_r=st.columns(2)
+        with col_w:
+            st.markdown("<div style='font-weight:700;color:#6ee7b7;font-size:.78rem;"
+                        "letter-spacing:.1em;margin-bottom:8px;'>✅ WINS</div>",
+                        unsafe_allow_html=True)
+            for w in (wins or ["✅ No specific wins identified yet"])[:4]:
+                st.markdown(
+                    f"<div style='background:#0a1f12;border-radius:8px;padding:10px 14px;"
+                    f"margin-bottom:6px;color:#a7f3d0;font-size:.84rem;line-height:1.5;'>"
+                    f"{w}</div>", unsafe_allow_html=True)
+        with col_r:
+            st.markdown("<div style='font-weight:700;color:#fca5a5;font-size:.78rem;"
+                        "letter-spacing:.1em;margin-bottom:8px;'>⚠️ RISKS</div>",
+                        unsafe_allow_html=True)
+            for r in (risks or ["✅ No critical risks detected"])[:4]:
+                st.markdown(
+                    f"<div style='background:#1a0d0d;border-radius:8px;padding:10px 14px;"
+                    f"margin-bottom:6px;color:#fca5a5;font-size:.84rem;line-height:1.5;'>"
+                    f"{r}</div>", unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 6 — AI-POWERED INSIGHT (Claude narrative paragraph)
+    # ══════════════════════════════════════════════════════════════════════
+    st.markdown(f"""
+    <div style="font-family:'Syne',sans-serif;font-size:1rem;font-weight:700;
+                color:#f1f5f9;margin:20px 0 10px;">
+        🤖 AI Executive Briefing
+        <span style="font-size:.75rem;font-weight:400;color:#64748b;">
+        — Your Business Intelligence Team · powered by Claude AI</span>
+    </div>""", unsafe_allow_html=True)
+
+    # Build compact context for Claude
+    try:
+        ctx_parts = [f"Domain: {domain}. Dataset: {len(df):,} records, {len(df.columns)} columns."]
+        if sc:
+            s=pd.to_numeric(df[sc],errors="coerce").dropna()
+            ctx_parts.append(f"Total revenue: {cur}{s.sum():,.0f}, avg: {cur}{s.mean():,.0f}.")
+        if pc:
+            p=pd.to_numeric(df[pc],errors="coerce").dropna()
+            ctx_parts.append(f"Total profit: {cur}{p.sum():,.0f}.")
+        if alerts:
+            ctx_parts.append(f"Critical alerts: {'; '.join(t for _,_,t,_ in alerts[:3])}.")
+        if wins:
+            ctx_parts.append(f"Key wins: {'; '.join(wins[:2])}.")
+        if risks:
+            ctx_parts.append(f"Key risks: {'; '.join(risks[:2])}.")
+        if sc and dc:
+            try:
+                rev_s=pd.to_numeric(df[sc],errors="coerce")
+                dates=pd.to_datetime(df[dc],errors="coerce")
+                df2=pd.DataFrame({"_r":rev_s,"_d":dates}).dropna()
+                df2["_M"]=df2["_d"].dt.to_period("M")
+                monthly=df2.groupby("_M")["_r"].sum()
+                if len(monthly)>=2:
+                    chg=(monthly.iloc[-1]-monthly.iloc[-2])/monthly.iloc[-2]*100
+                    ctx_parts.append(f"Recent trend: {chg:+.1f}% month-on-month.")
+            except: pass
+
+        context = " ".join(ctx_parts)
+        prompt = (
+            f"You are the lead analyst in a world-class Business Intelligence team. "
+            f"Write a sharp 3-sentence executive briefing for a business owner or CEO "
+            f"based on this data: {context} "
+            f"Sentence 1: State the single most important finding with a specific number. "
+            f"Sentence 2: Name the biggest risk or opportunity hiding in this data. "
+            f"Sentence 3: Give one precise action to take this week. "
+            f"Tone: confident, decisive, no hedging, no jargon. Never use bullet points."
+        )
+
+        with st.spinner("🤖 Your Business Intelligence Team is analysing..."):
+            ai_text = call_llm(prompt)
+
+        st.markdown(f"""
+        <div style="background:linear-gradient(135deg,#0a1628,#0d1f3c);
+                    border:1px solid {ac}33;border-radius:12px;
+                    padding:20px 24px;margin-bottom:8px;position:relative;">
+            <div style="position:absolute;top:14px;right:18px;
+                        background:{ac}22;color:{ac};border-radius:6px;
+                        padding:2px 10px;font-size:.68rem;font-weight:700;
+                        letter-spacing:.08em;">AI · CLAUDE</div>
+            <div style="color:#cbd5e1;font-size:.9rem;line-height:1.7;
+                        font-style:italic;">{ai_text}</div>
+        </div>""", unsafe_allow_html=True)
+
+    except Exception as e:
+        st.markdown(f"""
+        <div style="background:#0d1829;border:1px solid #1e293b;border-radius:12px;
+                    padding:16px 20px;color:#64748b;font-size:.85rem;">
+            AI insight unavailable — configure ANTHROPIC_API_KEY in Streamlit secrets.
+        </div>""", unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 7 — MONDAY MORNING ACTIONS
+    # ══════════════════════════════════════════════════════════════════════
+    actions=[]
+
+    try:
+        for sev,icon,title,_ in alerts[:2]:
+            if sev=="critical": actions.append(("🔴 Urgent",f"Resolve: {title}","This Week"))
+            else:               actions.append(("🟡 High",  f"Review: {title}", "This Month"))
+
+        if tgt and sc:
+            t_s=pd.to_numeric(df[tgt],errors="coerce").sum()
+            r_s=pd.to_numeric(df[sc], errors="coerce").sum()
+            ach=r_s/t_s*100 if t_s>0 else 0
+            if ach<95:
+                actions.append(("🔴 Urgent",
+                    f"Close target gap — {cur}{t_s-r_s:,.0f} remaining to hit goal","This Week"))
+
+        if sc and prd:
+            pg=df.groupby(prd)[sc].apply(lambda x: pd.to_numeric(x,errors="coerce").sum()).sort_values(ascending=False)
+            if len(pg)>=5:
+                bottom=", ".join(str(x) for x in pg.index[-3:])
+                actions.append(("🟢 Medium",f"Review underperforming: {bottom}","This Quarter"))
+
+        if reg and sc:
+            rg=df.groupby(reg)[sc].apply(lambda x: pd.to_numeric(x,errors="coerce").sum())
+            if len(rg)>=3:
+                actions.append(("🟢 Medium",
+                    f"Double down on **{rg.idxmax()}** — highest ROI expansion","This Quarter"))
+
+        if dis and sc:
+            d_s=pd.to_numeric(df[dis],errors="coerce")
+            r_s=pd.to_numeric(df[sc], errors="coerce")
+            ratio=d_s.sum()/(d_s.sum()+r_s.sum())*100
+            if ratio>15:
+                actions.append(("🟡 High",
+                    f"Implement discount approval workflow — {ratio:.1f}% revenue discounted","This Month"))
+
+        if attr and dept:
+            da=df.copy()
+            da["_left"]=da[attr].astype(str).str.lower().isin(["yes","true","1","resigned","terminated","left"])
+            dept_attr=da.groupby(dept)["_left"].mean().sort_values(ascending=False)
+            if len(dept_attr)>0 and dept_attr.iloc[0]>0.15:
+                actions.append(("🔴 Urgent",
+                    f"Launch retention programme in **{dept_attr.index[0]}** — "
+                    f"{dept_attr.iloc[0]*100:.0f}% attrition","This Week"))
+
+        if sp and conv:
+            sp_s=pd.to_numeric(df[sp],errors="coerce").sum()
+            cv_s=pd.to_numeric(df[conv],errors="coerce").sum()
+            if sp_s>0 and cv_s>0:
+                cpa=sp_s/cv_s
+                if cpa>1000:
+                    actions.append(("🟡 High",
+                        f"A/B test new creatives — CPA of {cur}{cpa:,.0f} is too high","This Month"))
+
+        if not actions:
+            actions=[
+                ("🟢 Medium","Schedule quarterly business review using this story","This Month"),
+                ("🟢 Medium","Share PDF report with all department heads","This Week"),
+                ("🟢 Medium","Set monthly data refresh cadence to track trends","Ongoing"),
+            ]
+    except Exception:
+        actions=[
+            ("🟢 Medium","Review findings with your leadership team","This Week"),
+            ("🟢 Medium","Export PDF for management presentation","This Week"),
+        ]
+
+    st.markdown(f"""
+    <div style="font-family:'Syne',sans-serif;font-size:1rem;font-weight:700;
+                color:#f1f5f9;margin:20px 0 10px;">
+        📋 Monday Morning Actions
+        <span style="font-size:.75rem;font-weight:400;color:#64748b;">
+        — prioritised next steps from your data</span>
+    </div>""", unsafe_allow_html=True)
+
+    priority_colors={"🔴 Urgent":("#2a0a0a","#ef4444"),
+                     "🟡 High":  ("#1f1800","#f59e0b"),
+                     "🟢 Medium":("#0a1a0a","#10b981")}
+
+    for i,(priority,action,timeline) in enumerate(actions[:5],1):
+        bg,pc_color=priority_colors.get(priority,("#0d1829","#64748b"))
+        st.markdown(f"""
+        <div style="background:{bg};border:1px solid {pc_color}33;
+                    border-radius:10px;padding:14px 18px;margin-bottom:8px;
+                    display:flex;align-items:flex-start;gap:14px;">
+            <div style="background:{pc_color}22;color:{pc_color};border-radius:50%;
+                        width:30px;height:30px;display:flex;align-items:center;
+                        justify-content:center;font-weight:800;font-size:.85rem;
+                        flex-shrink:0;margin-top:2px;">{i}</div>
+            <div style="flex:1;">
+                <div style="color:#e2e8f0;font-size:.88rem;line-height:1.5;
+                            margin-bottom:4px;">{action}</div>
+                <div style="color:{pc_color};font-size:.74rem;font-weight:700;
+                            letter-spacing:.05em;">{priority} · 📅 {timeline}</div>
+            </div>
+        </div>""", unsafe_allow_html=True)
+
+    # ── Footer ──────────────────────────────────────────────────────────────
+    st.markdown(f"""
+    <div style="background:linear-gradient(135deg,#020817,#0a1628);
+                border:1px solid {ac}33;border-radius:16px;
+                padding:22px 28px;margin-top:24px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;
+                    flex-wrap:wrap;gap:16px;">
+            <div>
+                <div style="font-family:'Syne',sans-serif;font-weight:800;
+                            color:#e2e8f0;font-size:1rem;margin-bottom:4px;">
+                    ⚡ 1 Click Data Analysis
+                </div>
+                <div style="color:#64748b;font-size:.8rem;margin-bottom:2px;">
+                    Anyone Can Do Data Analysis — No Coding. No Training. Just Upload.
+                </div>
+                <div style="color:{ac};font-size:.78rem;font-weight:600;">
+                    🤝 Your Business Intelligence Team — at a fraction of the cost.
+                </div>
+            </div>
+            <div style="text-align:right;">
+                <div style="color:#94a3b8;font-size:.8rem;font-weight:600;">
+                    {d_icon} {domain} Analysis Complete
+                </div>
+                <div style="color:#475569;font-size:.72rem;margin-top:4px;">
+                    {len(df):,} records · {len(df.columns)} columns
+                </div>
+                <div style="color:#334155;font-size:.7rem;margin-top:2px;">
+                    {datetime.datetime.now().strftime("%d %b %Y · %H:%M")}
+                </div>
+            </div>
+        </div>
+        <div style="border-top:1px solid #1e293b;margin-top:16px;padding-top:12px;
+                    display:flex;gap:20px;flex-wrap:wrap;">
+            <span style="color:#334155;font-size:.72rem;">💼 Sales</span>
+            <span style="color:#334155;font-size:.72rem;">📣 Marketing</span>
+            <span style="color:#334155;font-size:.72rem;">👥 HR</span>
+            <span style="color:#334155;font-size:.72rem;">🛒 Ecommerce</span>
+            <span style="color:#334155;font-size:.72rem;">🏪 Retail</span>
+            <span style="color:#334155;font-size:.72rem;">🚨 Fraud</span>
+            <span style="color:#334155;font-size:.72rem;">🔍 Generic</span>
+            <span style="color:#475569;font-size:.72rem;margin-left:auto;">
+                1clickdataanalysis.com
+            </span>
+        </div>
+    </div>
+    <div style="margin-bottom:28px;"></div>""", unsafe_allow_html=True)
+
+
+
 def render_summary(df, found, domain):
     section(f"📋 Executive Summary — {domain}", domain.lower())
     lines=[]
@@ -5577,6 +6542,7 @@ def main():
     elif domain=="Fraud":       render_fraud(df, found)
     else:                       render_generic(df, found)
 
+    render_one_click_story(df, found, domain)   # ⚡ FIRST — flagship feature
     render_advanced_dashboard(df, found, domain)
     render_eda(df, found, domain)
     render_prediction(df, found, domain)
