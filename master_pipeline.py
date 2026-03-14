@@ -785,6 +785,34 @@ def detect_columns(df):
         #  LATITUDE / LONGITUDE (Geospatial) 
         "latitude":     ["latitude","lat","lat_coordinate","y_coordinate","geo_lat"],
         "longitude":    ["longitude","lon","lng","long","lon_coordinate","x_coordinate","geo_lon"],
+
+        #  WORK LOCATION (HR Extended) 
+        "work_location":["work location","office","workplace","work place","remote","hybrid",
+                         "work_location","office_location","base_location","work_city",
+                         "work_site","reporting_location","base_office","office_city",
+                         "branch_office","work_from","posted_location","posting_location"],
+
+        #  NOTICE PERIOD (HR Extended) 
+        "notice_period":["notice period","notice_period","exit date","last working day",
+                         "date_of_exit","exit_date","last_day","separation_date",
+                         "offboarding_date","relieving_date","last_working_date","lwd"],
+
+        #  OVERTIME (HR Extended) 
+        "overtime":     ["overtime","overtime hours","extra hours","additional hours",
+                         "overtime_hours","extra_work","ot_hours","ot","overwork",
+                         "additional_work","overtime_amount","ot_amount"],
+
+        #  TRAINING (HR Extended) 
+        "training":     ["training hours","training days","learning hours","l&d hours",
+                         "training_hours","training_days","development_hours","learning_days",
+                         "courses_completed","certifications","training_score","skill_score",
+                         "learning_score","upskilling_hours","training_completed"],
+
+        #  LEAVE DAYS (HR Extended) 
+        "leave_days":   ["leave days","absent days","leaves taken","absenteeism",
+                         "leave_days","absent_days","leaves_taken","leave_balance",
+                         "annual_leave","sick_leave","casual_leave","total_leaves",
+                         "days_absent","absence_days","leave_count","time_off_days"],
     }
 
     # Pass 1: exact match
@@ -6561,6 +6589,13 @@ def main():
             "return_reason":  ("Return / Cancellation Reason", all_c, "🏪 Retail"),
             "shipping_country":("Shipping Country",            all_c, "🏪 Retail"),
 
+            # ══ 👥 HR EXTENDED (work location, satisfaction, notice period) ══
+            "work_location":  ("Work Location / Office",       all_c, "👥 HR Extended"),
+            "notice_period":  ("Notice Period / Exit Date",    all_c, "👥 HR Extended"),
+            "overtime":       ("Overtime / Extra Hours",       num_c, "👥 HR Extended"),
+            "training":       ("Training Hours / L&D",         num_c, "👥 HR Extended"),
+            "leave_days":     ("Leave Days / Absence Days",    num_c, "👥 HR Extended"),
+
             # ══ 🚨 FRAUD ══════════════════════════════════════════════════════
             "fraud_label":  ("Fraud Label / Class",          all_c, "🚨 Fraud"),
             "fraud_amount": ("Transaction Amount",           num_c, "🚨 Fraud"),
@@ -6577,21 +6612,26 @@ def main():
             "longitude":    ("Longitude",                    num_c, "🌍 Geo"),
         }
 
+        # ── Each domain shows exactly 42 column mapping dropdowns ─────────
+        # Sales & Revenue(9) + Dimensions(14) + Retail(9) + Marketing(10) = 42
+        # HR(14) + Dimensions(14) + Sales&Revenue(9) + HR Extended(5)      = 42
+        # Fraud(9) + Dimensions(14) + Sales&Revenue(9) + Marketing(10)     = 42
         DOMAIN_SECTIONS = {
             "Sales":     ["💼 Sales & Revenue", "📅 Dimensions",
                           "🏪 Retail", "📣 Marketing"],
             "Marketing": ["📣 Marketing", "📅 Dimensions",
                           "💼 Sales & Revenue", "🏪 Retail"],
             "HR":        ["👥 HR", "📅 Dimensions",
-                          "💼 Sales & Revenue"],
+                          "💼 Sales & Revenue", "👥 HR Extended"],
             "Ecommerce": ["💼 Sales & Revenue", "📅 Dimensions",
                           "🏪 Retail", "📣 Marketing"],
             "Retail":    ["💼 Sales & Revenue", "📅 Dimensions",
                           "🏪 Retail", "📣 Marketing"],
             "Fraud":     ["🚨 Fraud", "📅 Dimensions",
-                          "💼 Sales & Revenue"],
+                          "💼 Sales & Revenue", "📣 Marketing"],
             "Generic":   ["💼 Sales & Revenue", "📅 Dimensions", "👥 HR",
-                          "📣 Marketing", "🏪 Retail", "🚨 Fraud", "🌍 Geo"],
+                          "👥 HR Extended", "📣 Marketing", "🏪 Retail",
+                          "🚨 Fraud", "🌍 Geo"],
         }
         active_secs = DOMAIN_SECTIONS.get(domain, list(KEY_CATALOGUE.keys()))
 
