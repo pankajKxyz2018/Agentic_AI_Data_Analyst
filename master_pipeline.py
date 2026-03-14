@@ -1,11 +1,122 @@
 # ============================================================
 #  master_pipeline.py  —  Universal Agentic AI Data Analyst
-#  v8 — Multi-Tenant Login System + All Previous Features
+#  v12 — Google Sheets Connector + All Previous Features
 #  Domains: Sales · Marketing · HR · Ecommerce · Retail · Fraud · Generic
+# ============================================================
+# © 2024 Pankaj Kumar Das — 1 Click Data Analysis
+# All rights reserved. Unauthorized copying or distribution is prohibited.
+# Website: https://1clickdataanalysis.com
 # ============================================================
 
 import os, io, re, tempfile, sqlite3
 import streamlit as st
+
+# ─── Google Sheets Connector (public URL / no API key needed) ────────────────
+def _extract_sheet_id(url: str) -> str:
+    """Extract spreadsheet ID from a Google Sheets URL."""
+    m = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", url)
+    if m:
+        return m.group(1)
+    if "/" not in url and len(url) > 20:
+        return url.strip()
+    return ""
+
+def load_google_sheet_public(sheet_url: str, sheet_index: int = 0):
+    """
+    Load a public Google Sheet into a DataFrame using the CSV export URL.
+    No API key needed — user just needs to set sheet to 'Anyone with link can view'.
+    Returns (df, error_string). On success error_string is "".
+    """
+    import pandas as pd
+    sheet_id = _extract_sheet_id(sheet_url)
+    if not sheet_id:
+        return None, "❌ Invalid URL. Please paste the full Google Sheets URL from your browser."
+    # Google Sheets CSV export URL
+    csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={sheet_index}"
+    try:
+        df = pd.read_csv(csv_url)
+        if df.empty:
+            return None, "❌ The sheet appears to be empty."
+        # Clean up column names
+        df.columns = [str(c).strip() for c in df.columns]
+        return df, ""
+    except Exception as e:
+        err = str(e)
+        if "403" in err or "401" in err:
+            return None, (
+                "❌ Sheet is private. Please share it:\n\n"
+                "In Google Sheets → **Share** (top right) → "
+                "**'Anyone with the link'** → **Viewer** → **Done**\n\n"
+                "Then paste the URL again."
+            )
+        if "404" in err:
+            return None, "❌ Sheet not found. Please check the URL is correct."
+        return None, f"❌ Could not read sheet: {err}"
+
+def render_google_sheets_tab():
+    """
+    Renders the Google Sheets connector UI tab.
+    Returns a DataFrame if user connects successfully, else None.
+    Also returns a suggested filename string.
+    """
+    st.markdown("""
+<div style='background:linear-gradient(135deg,rgba(14,165,233,0.08),rgba(6,182,212,0.05));
+border:1px solid rgba(14,165,233,0.25);border-radius:12px;padding:20px 24px;margin-bottom:16px'>
+<h4 style='color:#0ea5e9;margin:0 0 6px 0'>🔗 Connect Google Sheet</h4>
+<p style='color:#64748b;font-size:.875rem;margin:0'>
+Read directly from any Google Sheet — no download needed. Works with live, updating sheets.
+</p></div>
+""", unsafe_allow_html=True)
+
+    with st.expander("📋 How to connect — 2 steps", expanded=True):
+        st.markdown("""
+**Step 1 — Make your sheet viewable:**
+1. Open your Google Sheet
+2. Click **Share** (top right, blue button)
+3. Under "General access" → change to **"Anyone with the link"**
+4. Set role to **Viewer** → click **Done**
+
+**Step 2 — Paste the URL below**
+
+> 🔒 Your data is read-only. It is processed in memory and never stored on our servers.
+        """)
+
+    sheet_url = st.text_input(
+        "Google Sheet URL",
+        placeholder="https://docs.google.com/spreadsheets/d/...",
+        key="gsheets_url_input",
+        label_visibility="collapsed"
+    )
+
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        connect_btn = st.button("📊 Load Sheet", type="primary",
+                                use_container_width=True, key="gsheets_connect_btn")
+    with col2:
+        sheet_num = st.number_input("Sheet #", min_value=1, max_value=20,
+                                    value=1, key="gsheets_sheet_num",
+                                    help="Which sheet tab to load (1 = first tab)")
+
+    if connect_btn and sheet_url.strip():
+        with st.spinner("🔄 Connecting to Google Sheets..."):
+            # gid parameter: sheet index starts at 0 for first tab
+            # For multi-tab sheets, user picks tab number (1-based → 0-based)
+            df, error = load_google_sheet_public(sheet_url.strip(), sheet_index=0)
+
+        if error:
+            st.error(error)
+            return None, None
+        else:
+            rows, cols = df.shape
+            st.success(f"✅ Connected! Loaded **{rows:,} rows × {cols} columns**")
+            with st.expander("👀 Preview — first 5 rows"):
+                st.dataframe(df.head(), use_container_width=True)
+            # Generate a filename from the sheet ID for display
+            sheet_id = _extract_sheet_id(sheet_url.strip())
+            fname = f"google_sheet_{sheet_id[:8]}.csv"
+            return df, fname
+
+    return None, None
 
 # ─── Auth Import ──────────────────────────────────────────────────────────────
 try:
@@ -6279,16 +6390,25 @@ def main():
         Upload any dataset — domain-specific KPIs, charts and insights are generated automatically.</p>
     """, unsafe_allow_html=True)
 
-    f = st.file_uploader("📂 Drop your data file here",
-        type=["csv","txt","xlsx","xls","xml","html","htm","pdf","db","sqlite"])
+    # ── DATA SOURCE TABS ────────────────────────────────────────────────────
+    tab_upload, tab_sheets = st.tabs(["📂 Upload File", "🔗 Google Sheets"])
 
-    # ── FILE SIZE ENFORCEMENT ─────────────────────────────────────────
-    if f is not None:
-        max_mb = get_plan_file_limit_mb() if AUTH_ENABLED else 200
-        file_mb = f.size / (1024 * 1024)
-        if file_mb > max_mb:
-            plan = "Starter" if max_mb == 50 else "Business"
-            st.error(f"""
+    f           = None
+    sheets_df   = None
+    sheets_fname = None
+
+    with tab_upload:
+        f = st.file_uploader("📂 Drop your data file here",
+            type=["csv","txt","xlsx","xls","xml","html","htm","pdf","db","sqlite"],
+            label_visibility="collapsed")
+
+        # ── FILE SIZE ENFORCEMENT ─────────────────────────────────────────
+        if f is not None:
+            max_mb = get_plan_file_limit_mb() if AUTH_ENABLED else 200
+            file_mb = f.size / (1024 * 1024)
+            if file_mb > max_mb:
+                plan = "Starter" if max_mb == 50 else "Business"
+                st.error(f"""
 ### 🚫 File Too Large — {file_mb:.1f}MB uploaded, {max_mb}MB allowed on your {plan} plan
 
 **Your plan limits:**
@@ -6300,9 +6420,15 @@ def main():
 
 👉 **[Upgrade your plan](mailto:pankaj@1clickdataanalysis.com?subject=Plan Upgrade Request)** to upload larger files.
 """)
-            st.stop()
+                st.stop()
 
-    if not f:
+    with tab_sheets:
+        sheets_df, sheets_fname = render_google_sheets_tab()
+
+    # ── Determine active data source ─────────────────────────────────────
+    has_data = (f is not None) or (sheets_df is not None)
+
+    if not has_data:
         cols=st.columns(3)
         descriptions=[
             ("💼 Sales","Revenue trends, top products, profit margin, regional analysis, customer ranking"),
@@ -6317,10 +6443,17 @@ def main():
                             unsafe_allow_html=True)
         return
 
-    with st.spinner("⚙️ Loading data..."):
-        df = load_data(f)
-    if df is None or df.empty:
-        st.error("❌ Failed to load file."); return
+    # ── Load data from whichever source is active ─────────────────────────
+    if sheets_df is not None:
+        # Google Sheets path — already a DataFrame
+        df = sheets_df
+        st.success(f"📊 Analysing Google Sheet — {len(df):,} rows × {len(df.columns)} cols")
+    else:
+        # File upload path
+        with st.spinner("⚙️ Loading data..."):
+            df = load_data(f)
+        if df is None or df.empty:
+            st.error("❌ Failed to load file."); return
 
     df     = clean_data(df)
     found  = detect_columns(df)
