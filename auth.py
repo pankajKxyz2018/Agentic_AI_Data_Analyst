@@ -401,9 +401,9 @@ def check_plan_limit(feature):
     """Check if user's plan allows a feature"""
     plan = get_user_plan()
     limits = {
-        "starter":    {"ml": False, "prescription": False, "pdf": True,  "domains": 3, "max_mb": 50},
-        "business":   {"ml": True,  "prescription": True,  "pdf": True,  "domains": 7, "max_mb": 200},
-        "enterprise": {"ml": True,  "prescription": True,  "pdf": True,  "domains": 7, "max_mb": 200},
+        "starter":    {"ml": False, "prescription": False, "pdf": True,  "domains": 3, "max_mb": 50,  "max_users": 1},
+        "business":   {"ml": True,  "prescription": True,  "pdf": True,  "domains": 7, "max_mb": 200, "max_users": 5},
+        "enterprise": {"ml": True,  "prescription": True,  "pdf": True,  "domains": 7, "max_mb": 200, "max_users": 25},
     }
     return limits.get(plan, limits["starter"]).get(feature, False)
 
