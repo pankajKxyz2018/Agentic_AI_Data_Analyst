@@ -968,6 +968,16 @@ def detect_domain(df, found):
     if "store"  in keys: scores["Retail"]+=5
     if any(k in h for k in ["store","retail","pos","branch","outlet","franchise"]): scores["Retail"]+=4
 
+    # ── Geo/Customer-only datasets (e.g. customer master, address list) ──────
+    # If dataset is purely customer + geography columns with no transactional data
+    # → classify as Ecommerce (most useful analysis) rather than crashing as Generic
+    if scores[winner] < 2:
+        has_customer_geo = ("customer" in keys or any(k in h for k in ["customer","client","buyer"]))
+        has_geo = sum(1 for k in ["city","state","country","postal_code","region","latitude","longitude"] if k in keys)
+        no_transactions = not any(k in keys for k in ["sales","profit","quantity","salary","spend","impressions","fraud_label"])
+        if has_customer_geo and has_geo >= 1 and no_transactions:
+            return "Ecommerce"  # Customer/address dataset → best fit is Ecommerce
+
     winner = max(scores, key=scores.get)
     return winner if scores[winner]>=2 else "Generic"
 
@@ -4568,6 +4578,13 @@ def render_calc_engine(df, found, domain):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def detect_anomalies(df, found, domain):
+    # Guard: skip anomaly detection for pure ID/geo datasets with no numeric signals
+    ID_LIKE_KEYS = ["id","code","zip","pin","postal","index","key","hash","uid","uuid","prefix"]
+    num_cols_check = df.select_dtypes(include="number").columns.tolist()
+    meaningful_num = [c for c in num_cols_check
+                      if not any(k in c.lower() for k in ID_LIKE_KEYS)]
+    if not meaningful_num:
+        return []  # No meaningful numeric columns → skip anomaly detection silently
     """
     Runs automatically on data load.
     Returns list of anomaly dicts: {severity, title, detail, icon}
@@ -5171,6 +5188,38 @@ def render_prediction(df, found, domain):
 
     num_cols = df.select_dtypes(include="number").columns.tolist()
     all_cols = list(df.columns)
+
+    # ── Guard: check dataset has meaningful numeric targets ───────────────
+    # Exclude pure ID/geo columns that make no sense as prediction targets
+    ID_LIKE = ["id","code","zip","pin","postal","index","key","hash","uid","uuid","prefix"]
+    meaningful_numeric = [c for c in num_cols
+                          if not any(k in c.lower() for k in ID_LIKE)]
+    meaningful_categorical = [c for c in df.select_dtypes(include="object").columns
+                               if df[c].nunique() <= 20
+                               and not any(k in c.lower() for k in ID_LIKE + ["name","email","phone","address"])]
+
+    if not meaningful_numeric and not meaningful_categorical:
+        st.info("""
+**🤖 Prediction Engine — Not enough predictive columns**
+
+This dataset appears to contain **customer/address/ID data** rather than transactional data.
+
+The Prediction Engine works best with datasets that have:
+- 📊 **Numeric targets**: Sales amount, salary, profit, quantity, ratings
+- 🎯 **Categorical targets**: Attrition (Yes/No), fraud (0/1), customer segment
+
+**What you can do with this dataset:**
+- 🗺️ Use the **Geographic Analysis** section to map customers by city/state
+- 📊 Use **EDA** to see distribution of customers across regions
+- 🔗 Merge this dataset with your orders/transactions CSV for full analysis
+        """)
+        return
+
+    # ── Row limit guard — prevent OOM on very large datasets ─────────────
+    MAX_ML_ROWS = 50000
+    if len(df) > MAX_ML_ROWS:
+        st.info(f"ℹ️ Dataset has {len(df):,} rows. Sampling {MAX_ML_ROWS:,} rows for faster model training.")
+        df = df.sample(MAX_ML_ROWS, random_state=42).reset_index(drop=True)
 
     # ── Step 1: Pick what to predict ──────────────────────────────────────
     st.markdown("**① What do you want to predict?**")
