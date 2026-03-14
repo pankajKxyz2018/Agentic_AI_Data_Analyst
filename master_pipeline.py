@@ -4578,6 +4578,11 @@ def render_calc_engine(df, found, domain):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def detect_anomalies(df, found, domain):
+    """
+    Runs automatically on data load.
+    Returns list of anomaly dicts: {severity, title, detail, icon}
+    severity: 'critical' | 'warning' | 'info'
+    """
     # Guard: skip anomaly detection for pure ID/geo datasets with no numeric signals
     ID_LIKE_KEYS = ["id","code","zip","pin","postal","index","key","hash","uid","uuid","prefix"]
     num_cols_check = df.select_dtypes(include="number").columns.tolist()
@@ -4585,11 +4590,6 @@ def detect_anomalies(df, found, domain):
                       if not any(k in c.lower() for k in ID_LIKE_KEYS)]
     if not meaningful_num:
         return []  # No meaningful numeric columns → skip anomaly detection silently
-    """
-    Runs automatically on data load.
-    Returns list of anomaly dicts: {severity, title, detail, icon}
-    severity: 'critical' | 'warning' | 'info'
-    """
     anomalies = []
     # Guard: convert object columns that are actually numeric
     try:
