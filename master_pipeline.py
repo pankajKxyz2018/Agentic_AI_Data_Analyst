@@ -968,9 +968,11 @@ def detect_domain(df, found):
     if "store"  in keys: scores["Retail"]+=5
     if any(k in h for k in ["store","retail","pos","branch","outlet","franchise"]): scores["Retail"]+=4
 
+    winner = max(scores, key=scores.get)
+
     # ── Geo/Customer-only datasets (e.g. customer master, address list) ──────
     # If dataset is purely customer + geography columns with no transactional data
-    # → classify as Ecommerce (most useful analysis) rather than crashing as Generic
+    # → classify as Ecommerce rather than crashing as Generic
     if scores[winner] < 2:
         has_customer_geo = ("customer" in keys or any(k in h for k in ["customer","client","buyer"]))
         has_geo = sum(1 for k in ["city","state","country","postal_code","region","latitude","longitude"] if k in keys)
@@ -978,7 +980,6 @@ def detect_domain(df, found):
         if has_customer_geo and has_geo >= 1 and no_transactions:
             return "Ecommerce"  # Customer/address dataset → best fit is Ecommerce
 
-    winner = max(scores, key=scores.get)
     return winner if scores[winner]>=2 else "Generic"
 
 # ─── UI Helpers ───────────────────────────────────────────────────────────────
