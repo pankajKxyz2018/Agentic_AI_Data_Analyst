@@ -1,121 +1,76 @@
 # ============================================================
 #  master_pipeline.py  —  Universal Agentic AI Data Analyst
-#  v12 — Google Sheets Connector + All Previous Features
+#  v12 — Google Sheets + All Previous Features
+#  © 2024 Pankaj Kumar Das — 1 Click Data Analysis
 #  Domains: Sales · Marketing · HR · Ecommerce · Retail · Fraud · Generic
-# ============================================================
-# © 2024 Pankaj Kumar Das — 1 Click Data Analysis
-# All rights reserved. Unauthorized copying or distribution is prohibited.
-# Website: https://1clickdataanalysis.com
 # ============================================================
 
 import os, io, re, tempfile, sqlite3
 import streamlit as st
 
-# ─── Google Sheets Connector (public URL / no API key needed) ────────────────
-def _extract_sheet_id(url: str) -> str:
-    """Extract spreadsheet ID from a Google Sheets URL."""
-    m = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", url)
-    if m:
-        return m.group(1)
-    if "/" not in url and len(url) > 20:
-        return url.strip()
+
+# ─── Google Sheets Connector (public URL / no API key needed) ─────────────────
+def _extract_sheet_id(url):
+    import re as _re
+    m = _re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", url)
+    if m: return m.group(1)
+    if "/" not in url and len(url) > 20: return url.strip()
     return ""
 
-def load_google_sheet_public(sheet_url: str, sheet_index: int = 0):
-    """
-    Load a public Google Sheet into a DataFrame using the CSV export URL.
-    No API key needed — user just needs to set sheet to 'Anyone with link can view'.
-    Returns (df, error_string). On success error_string is "".
-    """
-    import pandas as pd
+def load_google_sheet_public(sheet_url, sheet_index=0):
+    import pandas as _pd
     sheet_id = _extract_sheet_id(sheet_url)
     if not sheet_id:
-        return None, "❌ Invalid URL. Please paste the full Google Sheets URL from your browser."
-    # Google Sheets CSV export URL
-    csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={sheet_index}"
+        return None, "❌ Invalid URL. Paste the full Google Sheets URL."
+    csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
     try:
-        df = pd.read_csv(csv_url)
-        if df.empty:
-            return None, "❌ The sheet appears to be empty."
-        # Clean up column names
+        df = _pd.read_csv(csv_url)
+        if df.empty: return None, "❌ Sheet is empty."
         df.columns = [str(c).strip() for c in df.columns]
         return df, ""
     except Exception as e:
         err = str(e)
         if "403" in err or "401" in err:
-            return None, (
-                "❌ Sheet is private. Please share it:\n\n"
-                "In Google Sheets → **Share** (top right) → "
-                "**'Anyone with the link'** → **Viewer** → **Done**\n\n"
-                "Then paste the URL again."
-            )
+            return None, "❌ Sheet is private. Share it: Google Sheets → Share → Anyone with the link → Viewer → Done"
         if "404" in err:
-            return None, "❌ Sheet not found. Please check the URL is correct."
+            return None, "❌ Sheet not found. Check the URL."
         return None, f"❌ Could not read sheet: {err}"
 
 def render_google_sheets_tab():
-    """
-    Renders the Google Sheets connector UI tab.
-    Returns a DataFrame if user connects successfully, else None.
-    Also returns a suggested filename string.
-    """
     st.markdown("""
-<div style='background:linear-gradient(135deg,rgba(14,165,233,0.08),rgba(6,182,212,0.05));
-border:1px solid rgba(14,165,233,0.25);border-radius:12px;padding:20px 24px;margin-bottom:16px'>
-<h4 style='color:#0ea5e9;margin:0 0 6px 0'>🔗 Connect Google Sheet</h4>
+<div style='background:rgba(14,165,233,0.08);border:1px solid rgba(14,165,233,0.25);
+border-radius:12px;padding:18px 22px;margin-bottom:12px'>
+<h4 style='color:#0ea5e9;margin:0 0 4px 0'>🔗 Connect Google Sheet</h4>
 <p style='color:#64748b;font-size:.875rem;margin:0'>
-Read directly from any Google Sheet — no download needed. Works with live, updating sheets.
+Read live data from any Google Sheet — no download needed.
 </p></div>
 """, unsafe_allow_html=True)
-
-    with st.expander("📋 How to connect — 2 steps", expanded=True):
+    with st.expander("📋 How to connect (2 steps)", expanded=False):
         st.markdown("""
-**Step 1 — Make your sheet viewable:**
-1. Open your Google Sheet
-2. Click **Share** (top right, blue button)
-3. Under "General access" → change to **"Anyone with the link"**
-4. Set role to **Viewer** → click **Done**
+**Step 1:** Open your Google Sheet → click **Share** → set **"Anyone with the link"** → **Viewer** → Done
 
-**Step 2 — Paste the URL below**
+**Step 2:** Paste the URL below and click Load Sheet.
 
-> 🔒 Your data is read-only. It is processed in memory and never stored on our servers.
+> 🔒 Data is processed in memory only — never stored on our servers.
         """)
-
-    sheet_url = st.text_input(
-        "Google Sheet URL",
+    sheet_url = st.text_input("Google Sheet URL",
         placeholder="https://docs.google.com/spreadsheets/d/...",
-        key="gsheets_url_input",
-        label_visibility="collapsed"
-    )
-
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        connect_btn = st.button("📊 Load Sheet", type="primary",
-                                use_container_width=True, key="gsheets_connect_btn")
-    with col2:
-        sheet_num = st.number_input("Sheet #", min_value=1, max_value=20,
-                                    value=1, key="gsheets_sheet_num",
-                                    help="Which sheet tab to load (1 = first tab)")
-
+        key="gsheets_url_input", label_visibility="collapsed")
+    connect_btn = st.button("📊 Load Sheet", type="primary",
+                            use_container_width=False, key="gsheets_connect_btn")
     if connect_btn and sheet_url.strip():
         with st.spinner("🔄 Connecting to Google Sheets..."):
-            # gid parameter: sheet index starts at 0 for first tab
-            # For multi-tab sheets, user picks tab number (1-based → 0-based)
-            df, error = load_google_sheet_public(sheet_url.strip(), sheet_index=0)
-
+            df, error = load_google_sheet_public(sheet_url.strip())
         if error:
             st.error(error)
             return None, None
         else:
             rows, cols = df.shape
-            st.success(f"✅ Connected! Loaded **{rows:,} rows × {cols} columns**")
+            st.success(f"✅ Connected! {rows:,} rows × {cols} columns")
             with st.expander("👀 Preview — first 5 rows"):
                 st.dataframe(df.head(), use_container_width=True)
-            # Generate a filename from the sheet ID for display
             sheet_id = _extract_sheet_id(sheet_url.strip())
-            fname = f"google_sheet_{sheet_id[:8]}.csv"
-            return df, fname
-
+            return df, f"google_sheet_{sheet_id[:8]}.csv"
     return None, None
 
 # ─── Auth Import ──────────────────────────────────────────────────────────────
@@ -785,34 +740,6 @@ def detect_columns(df):
         #  LATITUDE / LONGITUDE (Geospatial) 
         "latitude":     ["latitude","lat","lat_coordinate","y_coordinate","geo_lat"],
         "longitude":    ["longitude","lon","lng","long","lon_coordinate","x_coordinate","geo_lon"],
-
-        #  WORK LOCATION (HR Extended) 
-        "work_location":["work location","office","workplace","work place","remote","hybrid",
-                         "work_location","office_location","base_location","work_city",
-                         "work_site","reporting_location","base_office","office_city",
-                         "branch_office","work_from","posted_location","posting_location"],
-
-        #  NOTICE PERIOD (HR Extended) 
-        "notice_period":["notice period","notice_period","exit date","last working day",
-                         "date_of_exit","exit_date","last_day","separation_date",
-                         "offboarding_date","relieving_date","last_working_date","lwd"],
-
-        #  OVERTIME (HR Extended) 
-        "overtime":     ["overtime","overtime hours","extra hours","additional hours",
-                         "overtime_hours","extra_work","ot_hours","ot","overwork",
-                         "additional_work","overtime_amount","ot_amount"],
-
-        #  TRAINING (HR Extended) 
-        "training":     ["training hours","training days","learning hours","l&d hours",
-                         "training_hours","training_days","development_hours","learning_days",
-                         "courses_completed","certifications","training_score","skill_score",
-                         "learning_score","upskilling_hours","training_completed"],
-
-        #  LEAVE DAYS (HR Extended) 
-        "leave_days":   ["leave days","absent days","leaves taken","absenteeism",
-                         "leave_days","absent_days","leaves_taken","leave_balance",
-                         "annual_leave","sick_leave","casual_leave","total_leaves",
-                         "days_absent","absence_days","leave_count","time_off_days"],
     }
 
     # Pass 1: exact match
@@ -970,15 +897,14 @@ def detect_domain(df, found):
 
     winner = max(scores, key=scores.get)
 
-    # ── Geo/Customer-only datasets (e.g. customer master, address list) ──────
-    # If dataset is purely customer + geography columns with no transactional data
-    # → classify as Ecommerce rather than crashing as Generic
+    # Customer/geo-only datasets → classify as Ecommerce not Generic
     if scores[winner] < 2:
-        has_customer_geo = ("customer" in keys or any(k in h for k in ["customer","client","buyer"]))
-        has_geo = sum(1 for k in ["city","state","country","postal_code","region","latitude","longitude"] if k in keys)
-        no_transactions = not any(k in keys for k in ["sales","profit","quantity","salary","spend","impressions","fraud_label"])
-        if has_customer_geo and has_geo >= 1 and no_transactions:
-            return "Ecommerce"  # Customer/address dataset → best fit is Ecommerce
+        h_lower = h
+        has_cust = "customer" in keys or any(k in h_lower for k in ["customer","client","buyer"])
+        has_geo  = sum(1 for k in ["city","state","country","postal_code","region"] if k in keys)
+        no_txn   = not any(k in keys for k in ["sales","profit","quantity","salary","spend","fraud_label"])
+        if has_cust and has_geo >= 1 and no_txn:
+            return "Ecommerce"
 
     return winner if scores[winner]>=2 else "Generic"
 
@@ -4584,13 +4510,11 @@ def detect_anomalies(df, found, domain):
     Returns list of anomaly dicts: {severity, title, detail, icon}
     severity: 'critical' | 'warning' | 'info'
     """
-    # Guard: skip anomaly detection for pure ID/geo datasets with no numeric signals
-    ID_LIKE_KEYS = ["id","code","zip","pin","postal","index","key","hash","uid","uuid","prefix"]
-    num_cols_check = df.select_dtypes(include="number").columns.tolist()
-    meaningful_num = [c for c in num_cols_check
-                      if not any(k in c.lower() for k in ID_LIKE_KEYS)]
-    if not meaningful_num:
-        return []  # No meaningful numeric columns → skip anomaly detection silently
+    # Skip if no meaningful numeric columns (e.g. pure ID/address datasets)
+    ID_KEYS = ["id","code","zip","pin","postal","index","key","hash","uid","uuid","prefix"]
+    num_c = df.select_dtypes(include="number").columns.tolist()
+    if not [c for c in num_c if not any(k in c.lower() for k in ID_KEYS)]:
+        return []
     anomalies = []
     # Guard: convert object columns that are actually numeric
     try:
@@ -5190,37 +5114,26 @@ def render_prediction(df, found, domain):
     num_cols = df.select_dtypes(include="number").columns.tolist()
     all_cols = list(df.columns)
 
-    # ── Guard: check dataset has meaningful numeric targets ───────────────
-    # Exclude pure ID/geo columns that make no sense as prediction targets
-    ID_LIKE = ["id","code","zip","pin","postal","index","key","hash","uid","uuid","prefix"]
-    meaningful_numeric = [c for c in num_cols
-                          if not any(k in c.lower() for k in ID_LIKE)]
-    meaningful_categorical = [c for c in df.select_dtypes(include="object").columns
-                               if df[c].nunique() <= 20
-                               and not any(k in c.lower() for k in ID_LIKE + ["name","email","phone","address"])]
-
-    if not meaningful_numeric and not meaningful_categorical:
+    # Guard: skip if only ID/geo numeric columns exist
+    ID_KEYS = ["id","code","zip","pin","postal","index","key","hash","uid","uuid","prefix"]
+    meaningful_num = [c for c in num_cols if not any(k in c.lower() for k in ID_KEYS)]
+    meaningful_cat = [c for c in df.select_dtypes(include="object").columns
+                      if df[c].nunique() <= 20 and not any(k in c.lower() for k in ID_KEYS+["name","email"])]
+    if not meaningful_num and not meaningful_cat:
         st.info("""
-**🤖 Prediction Engine — Not enough predictive columns**
+**🤖 Prediction Engine — not enough predictive columns**
 
-This dataset appears to contain **customer/address/ID data** rather than transactional data.
+This dataset contains customer/address/ID data rather than transactional data.
+The Prediction Engine needs numeric targets like sales, salary, or categorical targets like attrition.
 
-The Prediction Engine works best with datasets that have:
-- 📊 **Numeric targets**: Sales amount, salary, profit, quantity, ratings
-- 🎯 **Categorical targets**: Attrition (Yes/No), fraud (0/1), customer segment
-
-**What you can do with this dataset:**
-- 🗺️ Use the **Geographic Analysis** section to map customers by city/state
-- 📊 Use **EDA** to see distribution of customers across regions
-- 🔗 Merge this dataset with your orders/transactions CSV for full analysis
+**Try:** Merge this dataset with your orders or transactions CSV for full analysis.
         """)
         return
 
-    # ── Row limit guard — prevent OOM on very large datasets ─────────────
-    MAX_ML_ROWS = 50000
-    if len(df) > MAX_ML_ROWS:
-        st.info(f"ℹ️ Dataset has {len(df):,} rows. Sampling {MAX_ML_ROWS:,} rows for faster model training.")
-        df = df.sample(MAX_ML_ROWS, random_state=42).reset_index(drop=True)
+    # Row limit guard
+    if len(df) > 50000:
+        st.info(f"ℹ️ Sampling 50,000 rows from {len(df):,} for faster model training.")
+        df = df.sample(50000, random_state=42).reset_index(drop=True)
 
     # ── Step 1: Pick what to predict ──────────────────────────────────────
     st.markdown("**① What do you want to predict?**")
@@ -6470,17 +6383,14 @@ def main():
 
     # ── DATA SOURCE TABS ────────────────────────────────────────────────────
     tab_upload, tab_sheets = st.tabs(["📂 Upload File", "🔗 Google Sheets"])
-
-    f           = None
-    sheets_df   = None
+    f = None
+    sheets_df = None
     sheets_fname = None
 
     with tab_upload:
         f = st.file_uploader("📂 Drop your data file here",
             type=["csv","txt","xlsx","xls","xml","html","htm","pdf","db","sqlite"],
             label_visibility="collapsed")
-
-        # ── FILE SIZE ENFORCEMENT ─────────────────────────────────────────
         if f is not None:
             max_mb = get_plan_file_limit_mb() if AUTH_ENABLED else 200
             file_mb = f.size / (1024 * 1024)
@@ -6503,9 +6413,7 @@ def main():
     with tab_sheets:
         sheets_df, sheets_fname = render_google_sheets_tab()
 
-    # ── Determine active data source ─────────────────────────────────────
     has_data = (f is not None) or (sheets_df is not None)
-
     if not has_data:
         cols=st.columns(3)
         descriptions=[
@@ -6521,13 +6429,9 @@ def main():
                             unsafe_allow_html=True)
         return
 
-    # ── Load data from whichever source is active ─────────────────────────
     if sheets_df is not None:
-        # Google Sheets path — already a DataFrame
         df = sheets_df
-        st.success(f"📊 Analysing Google Sheet — {len(df):,} rows × {len(df.columns)} cols")
     else:
-        # File upload path
         with st.spinner("⚙️ Loading data..."):
             df = load_data(f)
         if df is None or df.empty:
@@ -6639,13 +6543,6 @@ def main():
             "return_reason":  ("Return / Cancellation Reason", all_c, "🏪 Retail"),
             "shipping_country":("Shipping Country",            all_c, "🏪 Retail"),
 
-            # ══ 👥 HR EXTENDED (work location, satisfaction, notice period) ══
-            "work_location":  ("Work Location / Office",       all_c, "👥 HR Extended"),
-            "notice_period":  ("Notice Period / Exit Date",    all_c, "👥 HR Extended"),
-            "overtime":       ("Overtime / Extra Hours",       num_c, "👥 HR Extended"),
-            "training":       ("Training Hours / L&D",         num_c, "👥 HR Extended"),
-            "leave_days":     ("Leave Days / Absence Days",    num_c, "👥 HR Extended"),
-
             # ══ 🚨 FRAUD ══════════════════════════════════════════════════════
             "fraud_label":  ("Fraud Label / Class",          all_c, "🚨 Fraud"),
             "fraud_amount": ("Transaction Amount",           num_c, "🚨 Fraud"),
@@ -6662,26 +6559,21 @@ def main():
             "longitude":    ("Longitude",                    num_c, "🌍 Geo"),
         }
 
-        # ── Each domain shows exactly 42 column mapping dropdowns ─────────
-        # Sales & Revenue(9) + Dimensions(14) + Retail(9) + Marketing(10) = 42
-        # HR(14) + Dimensions(14) + Sales&Revenue(9) + HR Extended(5)      = 42
-        # Fraud(9) + Dimensions(14) + Sales&Revenue(9) + Marketing(10)     = 42
         DOMAIN_SECTIONS = {
             "Sales":     ["💼 Sales & Revenue", "📅 Dimensions",
                           "🏪 Retail", "📣 Marketing"],
             "Marketing": ["📣 Marketing", "📅 Dimensions",
                           "💼 Sales & Revenue", "🏪 Retail"],
             "HR":        ["👥 HR", "📅 Dimensions",
-                          "💼 Sales & Revenue", "👥 HR Extended"],
+                          "💼 Sales & Revenue"],
             "Ecommerce": ["💼 Sales & Revenue", "📅 Dimensions",
                           "🏪 Retail", "📣 Marketing"],
             "Retail":    ["💼 Sales & Revenue", "📅 Dimensions",
                           "🏪 Retail", "📣 Marketing"],
             "Fraud":     ["🚨 Fraud", "📅 Dimensions",
-                          "💼 Sales & Revenue", "📣 Marketing"],
+                          "💼 Sales & Revenue"],
             "Generic":   ["💼 Sales & Revenue", "📅 Dimensions", "👥 HR",
-                          "👥 HR Extended", "📣 Marketing", "🏪 Retail",
-                          "🚨 Fraud", "🌍 Geo"],
+                          "📣 Marketing", "🏪 Retail", "🚨 Fraud", "🌍 Geo"],
         }
         active_secs = DOMAIN_SECTIONS.get(domain, list(KEY_CATALOGUE.keys()))
 
