@@ -73,6 +73,569 @@ Read live data from any Google Sheet — no download needed.
             return df, f"google_sheet_{sheet_id[:8]}.csv"
     return None, None
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  🎙️ VOICE ASSISTANT ENGINE — Phase 1 + Phase 2
+#  Phase 1: File size voice alert + Chart suitability rules
+#  Phase 2: Voice column selection + Voice column mapping + Voice chart requests
+# ══════════════════════════════════════════════════════════════════════════════
+
+import difflib as _difflib
+
+# ── Chart Suitability Rules ───────────────────────────────────────────────────
+CHART_RULES = {
+    "pie": {
+        "needs": ["one categorical column"],
+        "max_unique": 8,
+        "best_for": "Part-of-whole with ≤8 categories",
+        "not_for": "High cardinality columns, numeric continuous data, time series",
+        "alternatives": {"high_cardinality": "bar", "numeric": "histogram", "time": "line"},
+    },
+    "bar": {
+        "needs": ["one categorical column"],
+        "max_unique": 50,
+        "best_for": "Comparing categories, rankings, counts",
+        "not_for": "Time series with many points (use line chart)",
+        "alternatives": {"time": "line", "two_numeric": "scatter"},
+    },
+    "line": {
+        "needs": ["date or ordered column"],
+        "best_for": "Trends over time, continuous changes",
+        "not_for": "Unordered categories, single data point",
+        "alternatives": {"no_date": "bar", "categorical": "bar"},
+    },
+    "scatter": {
+        "needs": ["two numeric columns"],
+        "best_for": "Correlation between two numeric variables",
+        "not_for": "Single column, categorical data",
+        "alternatives": {"single_col": "histogram", "categorical": "bar"},
+    },
+    "heatmap": {
+        "needs": ["two categorical columns + one numeric"],
+        "best_for": "Cross-tabulation, correlation matrix",
+        "not_for": "Single column data",
+        "alternatives": {"single_col": "bar"},
+    },
+    "histogram": {
+        "needs": ["one numeric column"],
+        "best_for": "Distribution of a numeric variable",
+        "not_for": "Categorical columns",
+        "alternatives": {"categorical": "bar"},
+    },
+    "area": {
+        "needs": ["date or time column + numeric"],
+        "best_for": "Cumulative trends over time",
+        "not_for": "Categorical data without time axis",
+        "alternatives": {"no_date": "bar"},
+    },
+    "treemap": {
+        "needs": ["one categorical + one numeric"],
+        "best_for": "Hierarchical part-of-whole relationships",
+        "not_for": "Non-hierarchical or equal-value data",
+        "alternatives": {"flat": "pie"},
+    },
+    "3d": {
+        "needs": ["three columns: two categorical/numeric + one numeric"],
+        "best_for": "Multi-dimensional comparisons",
+        "not_for": "Simple two-column data (overkill)",
+        "alternatives": {"simple": "bar"},
+    },
+    "decision_tree": {
+        "needs": ["multiple columns including a target/label column"],
+        "best_for": "Classification logic, prediction explanation",
+        "not_for": "Purely descriptive analysis without a target column",
+        "alternatives": {"no_target": "scatter"},
+    },
+}
+
+def check_chart_suitability(chart_type, col_name, df):
+    """
+    Returns (is_suitable: bool, message: str, recommended_chart: str)
+    Checks if a chart type is appropriate for the given column.
+    """
+    chart_type = chart_type.lower().strip()
+    # Normalise aliases
+    aliases = {
+        "column chart": "bar", "column": "bar", "vertical bar": "bar",
+        "horizontal bar": "bar", "donut": "pie", "doughnut": "pie",
+        "trend": "line", "trend chart": "line", "sparkline": "line",
+        "3d column": "3d", "3d bar": "3d", "2d column": "bar",
+        "heat map": "heatmap", "heat": "heatmap",
+        "tree map": "treemap", "tree": "treemap",
+        "dot plot": "scatter", "bubble": "scatter",
+    }
+    chart_type = aliases.get(chart_type, chart_type)
+
+    if col_name not in df.columns:
+        # Fuzzy match column name
+        matches = _difflib.get_close_matches(col_name, df.columns.tolist(), n=1, cutoff=0.4)
+        if matches:
+            col_name = matches[0]
+        else:
+            return False, f"Column '{col_name}' not found in dataset.", "bar"
+
+    col = df[col_name]
+    is_numeric   = pd.api.types.is_numeric_dtype(col)
+    is_datetime  = pd.api.types.is_datetime64_any_dtype(col)
+    has_date_kw  = any(k in col_name.lower() for k in ["date","time","month","year","period","week"])
+    n_unique     = col.nunique()
+    n_rows       = len(col)
+    cardinality_pct = n_unique / n_rows * 100 if n_rows > 0 else 0
+
+    rule = CHART_RULES.get(chart_type)
+    if not rule:
+        return True, f"✅ Chart type '{chart_type}' — no specific rules, generating chart.", chart_type
+
+    # ── PIE ──
+    if chart_type == "pie":
+        if is_numeric and not is_datetime:
+            msg = (f"❌ **Pie chart not ideal for '{col_name}'** — it's a numeric column with "
+                   f"{n_unique} unique values. Pie charts show category shares, not numeric distributions. "
+                   f"**Recommended: Histogram** to see the distribution of values.")
+            return False, msg, "histogram"
+        if n_unique > 8:
+            msg = (f"❌ **Pie chart not ideal for '{col_name}'** — it has **{n_unique} unique categories** "
+                   f"({cardinality_pct:.0f}% cardinality). A pie chart with {n_unique} slices would be "
+                   f"unreadable. **Recommended: Bar chart** showing Top 10 categories by count.")
+            return False, msg, "bar"
+        msg = f"✅ **Pie chart is perfect for '{col_name}'** — {n_unique} categories, ideal for showing proportions."
+        return True, msg, "pie"
+
+    # ── LINE ──
+    if chart_type == "line":
+        if not is_datetime and not has_date_kw and not is_numeric:
+            msg = (f"❌ **Line chart not ideal for '{col_name}'** — it's a categorical column without a "
+                   f"time axis. Line charts show trends over ordered sequences. "
+                   f"**Recommended: Bar chart** for comparing categories.")
+            return False, msg, "bar"
+        if is_datetime or has_date_kw:
+            msg = f"✅ **Line chart is perfect for '{col_name}'** — it's a date/time column, ideal for trend analysis."
+            return True, msg, "line"
+        msg = f"✅ **Line chart works for '{col_name}'** — numeric sequence detected."
+        return True, msg, "line"
+
+    # ── SCATTER ──
+    if chart_type == "scatter":
+        if not is_numeric:
+            msg = (f"❌ **Scatter plot not ideal for '{col_name}'** — scatter plots need two numeric "
+                   f"columns to show correlation. '{col_name}' is {'text' if not is_numeric else 'numeric'}. "
+                   f"**Recommended: Bar chart** for categorical comparison.")
+            return False, msg, "bar"
+        msg = f"✅ **Scatter plot works for '{col_name}'** — numeric column detected. Pick a second numeric column for the Y axis."
+        return True, msg, "scatter"
+
+    # ── BAR / HISTOGRAM ──
+    if chart_type in ["bar", "histogram"]:
+        if chart_type == "histogram" and not is_numeric:
+            msg = (f"❌ **Histogram not ideal for '{col_name}'** — histograms show distribution of "
+                   f"numeric data. '{col_name}' is categorical. **Recommended: Bar chart** for category counts.")
+            return False, msg, "bar"
+        msg = f"✅ **{'Bar chart' if chart_type == 'bar' else 'Histogram'} is perfect for '{col_name}'**."
+        return True, msg, chart_type
+
+    # ── HEATMAP ──
+    if chart_type == "heatmap":
+        if is_numeric:
+            msg = f"✅ **Heatmap works for '{col_name}'** — will create a correlation heatmap with all numeric columns."
+            return True, msg, "heatmap"
+        msg = (f"⚠️ **Heatmap works best with numeric data or a pair of categoricals.** "
+               f"'{col_name}' is categorical — will use it as one axis. Pick a numeric value column for the heatmap values.")
+        return True, msg, "heatmap"
+
+    return True, f"✅ **{chart_type.title()} chart** — generating for '{col_name}'.", chart_type
+
+
+def fuzzy_match_columns(spoken_text, df_columns):
+    """
+    Takes a voice transcript and returns a list of matched column names.
+    Handles partial matches, case insensitivity, underscore/space variants.
+    """
+    spoken_lower  = spoken_text.lower()
+    col_map       = {c.lower().replace("_"," "): c for c in df_columns}
+    col_map.update({c.lower(): c for c in df_columns})
+    matched = []
+
+    # Pass 1: exact/substring match
+    for norm_col, orig_col in col_map.items():
+        if norm_col in spoken_lower and orig_col not in matched:
+            matched.append(orig_col)
+
+    # Pass 2: fuzzy match on words
+    words = spoken_lower.replace(",","").replace("and","").split()
+    bigrams = [f"{words[i]} {words[i+1]}" for i in range(len(words)-1)]
+    tokens  = words + bigrams
+    for token in tokens:
+        if len(token) < 3: continue
+        close = _difflib.get_close_matches(token, list(col_map.keys()), n=1, cutoff=0.75)
+        if close:
+            orig = col_map[close[0]]
+            if orig not in matched:
+                matched.append(orig)
+
+    return matched
+
+
+def parse_voice_column_mapping(transcript, df_columns, key_catalogue):
+    """
+    Parses phrases like:
+    - "Sales Amount should be revenue"
+    - "Joining Date is hire date"
+    - "Department Name map to department"
+    Returns dict of {key: column_name} to update in found/session_state
+    """
+    mappings = {}
+    transcript_lower = transcript.lower()
+
+    # Known mapping keys and their aliases
+    key_aliases = {
+        "sales": ["sales","revenue","income","turnover"],
+        "profit": ["profit","margin","earnings"],
+        "quantity": ["quantity","qty","units","volume"],
+        "salary": ["salary","pay","ctc","wage","compensation"],
+        "department": ["department","dept","division","team"],
+        "attrition": ["attrition","left","churn","resigned"],
+        "hire_date": ["hire date","joining date","start date","doj","date of joining"],
+        "date": ["date","transaction date","order date","sale date"],
+        "customer": ["customer","client","buyer","account"],
+        "product": ["product","item","sku","goods"],
+        "region": ["region","territory","zone","area"],
+        "category": ["category","product group","type"],
+        "employee_id": ["employee id","emp id","staff id"],
+        "employee_name": ["employee name","staff name","emp name"],
+        "job_title": ["job title","designation","position","role"],
+        "gender": ["gender","sex"],
+        "age": ["age","years old"],
+        "tenure": ["tenure","experience","years of service"],
+        "spend": ["spend","ad spend","marketing cost","budget"],
+        "impressions": ["impressions","views","reach"],
+        "clicks": ["clicks","click"],
+        "conversions": ["conversions","leads","sign ups"],
+        "fraud_label": ["fraud","is fraud","fraudulent","label","class"],
+    }
+
+    patterns = [" is ", " should be ", " map to ", " as ", " = "]
+
+    for pattern in patterns:
+        if pattern in transcript_lower:
+            parts = transcript_lower.split(pattern)
+            if len(parts) >= 2:
+                col_part = parts[0].strip().split()[-3:]  # last 3 words
+                key_part = parts[1].strip().split()[:3]   # first 3 words
+                col_text = " ".join(col_part)
+                key_text = " ".join(key_part)
+
+                # Match column
+                col_matches = fuzzy_match_columns(col_text, df_columns)
+                if not col_matches:
+                    continue
+                matched_col = col_matches[0]
+
+                # Match key
+                for key, aliases in key_aliases.items():
+                    if any(alias in key_text for alias in aliases):
+                        if key in [k for k in key_catalogue.keys()]:
+                            mappings[key] = matched_col
+                        break
+
+    return mappings
+
+
+# ── Voice UI Component ────────────────────────────────────────────────────────
+VOICE_JS = """
+<div id="voice-assistant-wrap" style="
+    background: linear-gradient(135deg, rgba(14,165,233,0.08), rgba(139,92,246,0.05));
+    border: 1px solid rgba(14,165,233,0.3);
+    border-radius: 14px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+    position: relative;
+">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+    <div id="mic-icon" style="font-size:1.4rem;">🎙️</div>
+    <div>
+      <div style="font-weight:700;color:#e2e8f0;font-size:.9rem;">Voice Assistant</div>
+      <div style="font-size:.75rem;color:#64748b;">Chrome/Edge only · Click mic and speak</div>
+    </div>
+    <button id="mic-btn" onclick="toggleVoice()" style="
+        margin-left:auto;
+        background: rgba(14,165,233,0.15);
+        border: 1px solid rgba(14,165,233,0.4);
+        color: #0ea5e9; border-radius: 10px;
+        padding: 8px 18px; cursor: pointer;
+        font-weight: 700; font-size: .82rem;
+        transition: all 0.2s;
+    ">🎙️ Start Listening</button>
+  </div>
+
+  <div id="voice-status" style="
+      font-size:.8rem; color:#64748b;
+      padding: 6px 10px;
+      background: rgba(0,0,0,0.2);
+      border-radius: 8px;
+      min-height: 28px;
+  ">Say: &quot;show me Sales, Region, Profit&quot; · &quot;give me a bar chart of Revenue&quot; · &quot;Sales Amount is revenue column&quot;</div>
+
+  <div id="voice-transcript" style="
+      margin-top: 8px;
+      font-size:.82rem; color:#94a3b8;
+      min-height: 20px;
+  "></div>
+</div>
+
+<script>
+var recognition = null;
+var isListening = false;
+
+function toggleVoice() {
+  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+    document.getElementById('voice-status').innerHTML =
+      '❌ Voice not supported in this browser. Please use Chrome or Edge.';
+    document.getElementById('voice-status').style.color = '#ef4444';
+    return;
+  }
+
+  if (isListening) {
+    stopListening();
+  } else {
+    startListening();
+  }
+}
+
+function startListening() {
+  var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recognition = new SpeechRecognition();
+  recognition.lang = 'en-IN';
+  recognition.continuous = false;
+  recognition.interimResults = true;
+  recognition.maxAlternatives = 1;
+
+  recognition.onstart = function() {
+    isListening = true;
+    document.getElementById('mic-btn').innerHTML = '⏹️ Stop';
+    document.getElementById('mic-btn').style.background = 'rgba(239,68,68,0.2)';
+    document.getElementById('mic-btn').style.borderColor = 'rgba(239,68,68,0.5)';
+    document.getElementById('mic-btn').style.color = '#ef4444';
+    document.getElementById('mic-icon').innerHTML = '🔴';
+    document.getElementById('voice-status').innerHTML = '🎙️ Listening... speak now';
+    document.getElementById('voice-status').style.color = '#0ea5e9';
+  };
+
+  recognition.onresult = function(event) {
+    var transcript = '';
+    for (var i = event.resultIndex; i < event.results.length; i++) {
+      transcript += event.results[i][0].transcript;
+    }
+    document.getElementById('voice-transcript').innerHTML =
+      '<span style="color:#64748b">Heard: </span><span style="color:#e2e8f0">' + transcript + '</span>';
+
+    if (event.results[event.results.length-1].isFinal) {
+      sendToStreamlit(transcript);
+    }
+  };
+
+  recognition.onerror = function(event) {
+    var msgs = {
+      'not-allowed': '❌ Mic access denied. Please allow microphone in browser settings.',
+      'no-speech':   '⚠️ No speech detected. Try again.',
+      'network':     '⚠️ Network error. Check connection.',
+    };
+    document.getElementById('voice-status').innerHTML =
+      msgs[event.error] || ('❌ Error: ' + event.error);
+    document.getElementById('voice-status').style.color = '#f59e0b';
+    stopListening();
+  };
+
+  recognition.onend = function() {
+    stopListening();
+  };
+
+  recognition.start();
+}
+
+function stopListening() {
+  isListening = false;
+  if (recognition) { try { recognition.stop(); } catch(e) {} }
+  document.getElementById('mic-btn').innerHTML = '🎙️ Start Listening';
+  document.getElementById('mic-btn').style.background = 'rgba(14,165,233,0.15)';
+  document.getElementById('mic-btn').style.borderColor = 'rgba(14,165,233,0.4)';
+  document.getElementById('mic-btn').style.color = '#0ea5e9';
+  document.getElementById('mic-icon').innerHTML = '🎙️';
+  if (!document.getElementById('voice-transcript').innerHTML) {
+    document.getElementById('voice-status').innerHTML =
+      'Say: &quot;show me Sales, Region, Profit&quot; · &quot;give me a bar chart of Revenue&quot; · &quot;Sales Amount is revenue column&quot;';
+    document.getElementById('voice-status').style.color = '#64748b';
+  }
+}
+
+function sendToStreamlit(transcript) {
+  document.getElementById('voice-status').innerHTML =
+    '✅ Processing: <strong style="color:#e2e8f0">' + transcript + '</strong>';
+  document.getElementById('voice-status').style.color = '#10b981';
+
+  // Send to Streamlit via the input element trick
+  var input = window.parent.document.querySelector('input[data-testid="stTextInput"][aria-label="voice_input_hidden"]');
+  if (!input) {
+    // Fallback: use postMessage
+    window.parent.postMessage({type: 'voice_transcript', transcript: transcript}, '*');
+    return;
+  }
+  var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  nativeInputValueSetter.call(input, transcript);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+// TTS — speak a message aloud
+function speak(text) {
+  if (!('speechSynthesis' in window)) return;
+  window.speechSynthesis.cancel();
+  var utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = 'en-IN';
+  utterance.rate = 0.95;
+  utterance.pitch = 1.0;
+  window.speechSynthesis.speak(utterance);
+}
+
+// Auto-speak pending TTS message
+var ttsMsg = document.getElementById('tts-pending');
+if (ttsMsg && ttsMsg.dataset.text) {
+  setTimeout(function() { speak(ttsMsg.dataset.text); }, 500);
+}
+</script>
+<div id="tts-pending" data-text="" style="display:none;"></div>
+"""
+
+TTS_JS = """
+<script>
+(function() {
+  var text = "{tts_text}";
+  if (!text || !('speechSynthesis' in window)) return;
+  setTimeout(function() {{
+    window.speechSynthesis.cancel();
+    var u = new SpeechSynthesisUtterance(text);
+    u.lang = 'en-IN'; u.rate = 0.92; u.pitch = 1.0;
+    window.speechSynthesis.speak(u);
+  }}, 400);
+})();
+</script>
+"""
+
+def render_voice_assistant(df, key_suffix="main"):
+    """
+    Renders the voice assistant UI and processes any transcript.
+    Returns dict: {action, columns, chart_type, col_name, mapping, message, tts}
+    """
+    # Hidden text input that JS writes the transcript into
+    transcript = st.text_input(
+        "voice_input_hidden",
+        key=f"voice_input_{key_suffix}",
+        label_visibility="hidden",
+        placeholder=""
+    )
+
+    # Render the mic UI
+    st.components.v1.html(VOICE_JS, height=130, scrolling=False)
+
+    result = {"action": None, "columns": [], "chart_type": None,
+              "col_name": None, "mapping": {}, "message": "", "tts": ""}
+
+    if not transcript or not transcript.strip():
+        return result
+
+    t = transcript.strip().lower()
+
+    # ── Detect intent ─────────────────────────────────────────────────
+    COLUMN_TRIGGERS  = ["show me","only","select","use","columns","focus on","keep","i want"]
+    CHART_TRIGGERS   = ["chart","graph","plot","visuali","show","give me","create","draw","make"]
+    MAP_TRIGGERS     = ["is","should be","map to","as my","set as"]
+    SIZE_TRIGGERS    = ["size","large","limit","mb","megabyte","too big","exceed","over"]
+
+    is_column_select = any(t_k in t for t_k in COLUMN_TRIGGERS)
+    is_chart_request = any(t_k in t for t_k in CHART_TRIGGERS)
+    is_mapping_req   = any(t_k in t for t_k in MAP_TRIGGERS)
+    is_size_query    = any(t_k in t for t_k in SIZE_TRIGGERS)
+
+    # ── File size query ───────────────────────────────────────────────
+    if is_size_query:
+        max_mb = get_plan_file_limit_mb() if AUTH_ENABLED else 200
+        plan   = "Starter" if max_mb == 50 else "Business"
+        msg    = (f"Your current {plan} plan supports files up to {max_mb} megabytes. "
+                  f"Starter plan supports 50 megabytes for ₹2,000 per month. "
+                  f"Business plan supports 200 megabytes for ₹8,000 per month. "
+                  f"Enterprise plan supports unlimited file size for ₹25,000 per month.")
+        result.update({"action":"size_info","message":msg,"tts":msg})
+        return result
+
+    # ── Column mapping request ────────────────────────────────────────
+    if is_mapping_req and not is_chart_request:
+        from master_pipeline import KEY_CATALOGUE  # will resolve at runtime via session
+        kc_keys = list(st.session_state.get("_key_catalogue_keys", {}).keys())
+        mappings = parse_voice_column_mapping(transcript, df.columns.tolist(), {k:{} for k in kc_keys})
+        if mappings:
+            msg = "Mapped: " + ", ".join(f"{v} → {k}" for k,v in mappings.items())
+            tts = "Done. I have mapped " + ", ".join(f"{v} as {k.replace('_',' ')}" for k,v in mappings.items())
+            result.update({"action":"column_map","mapping":mappings,"message":msg,"tts":tts})
+        else:
+            msg = f"I heard '{transcript}' but could not match any columns. Try saying: 'Sales Amount is revenue column'"
+            result.update({"action":"column_map","message":msg,"tts":msg})
+        return result
+
+    # ── Chart request ─────────────────────────────────────────────────
+    chart_keywords = {
+        "pie":"pie","bar":"bar","line":"line","area":"area","scatter":"scatter",
+        "heatmap":"heatmap","heat map":"heatmap","histogram":"histogram",
+        "treemap":"treemap","tree map":"treemap","3d":"3d","decision tree":"decision_tree",
+        "column chart":"bar","trend":"line","bubble":"scatter","dot":"scatter",
+    }
+    detected_chart = None
+    for kw, ct in chart_keywords.items():
+        if kw in t:
+            detected_chart = ct
+            break
+
+    if is_chart_request and detected_chart:
+        cols_mentioned = fuzzy_match_columns(transcript, df.columns.tolist())
+        col_name = cols_mentioned[0] if cols_mentioned else None
+
+        if col_name:
+            suitable, msg, recommended = check_chart_suitability(detected_chart, col_name, df)
+            tts_msg = msg.replace("**","").replace("❌","").replace("✅","").replace("⚠️","")
+            if not suitable:
+                tts_msg += f" I recommend a {recommended} chart instead."
+            result.update({
+                "action": "chart",
+                "chart_type": recommended if not suitable else detected_chart,
+                "col_name": col_name,
+                "message": msg,
+                "tts": tts_msg,
+                "suitable": suitable,
+            })
+        else:
+            msg = f"I heard you want a {detected_chart} chart but couldn't identify the column. Please say the column name clearly."
+            result.update({"action":"chart","chart_type":detected_chart,"message":msg,"tts":msg})
+        return result
+
+    # ── Column selection ──────────────────────────────────────────────
+    if is_column_select or (not is_chart_request and not is_mapping_req):
+        cols = fuzzy_match_columns(transcript, df.columns.tolist())
+        if cols:
+            msg = f"✅ Found {len(cols)} column(s): {', '.join(cols)}"
+            tts = f"Found {len(cols)} columns: {', '.join(cols)}. Applying to column mapping."
+            result.update({"action":"column_select","columns":cols,"message":msg,"tts":tts})
+        else:
+            msg = f"I heard '{transcript}' but couldn't match any column names from your dataset."
+            result.update({"action":"column_select","message":msg,"tts":msg})
+        return result
+
+    return result
+
+
+def speak_tts(text):
+    """Trigger browser text-to-speech for a given message."""
+    import html as _html
+    safe_text = _html.escape(text).replace("'","&#39;")
+    js = TTS_JS.replace("{tts_text}", safe_text)
+    st.components.v1.html(js, height=0, scrolling=False)
+
 # ─── Auth Import ──────────────────────────────────────────────────────────────
 try:
     from auth import (render_login_page, render_user_header, render_admin_panel,
@@ -6408,6 +6971,15 @@ def main():
 
 👉 **[Upgrade your plan](mailto:pankaj@1clickdataanalysis.com?subject=Plan Upgrade Request)** to upload larger files.
 """)
+                # 🎙️ Voice alert — speak the file size error aloud
+                tts_msg = (
+                    f"Your file is {file_mb:.0f} megabytes. "
+                    f"The {plan} plan supports up to {max_mb} megabytes only. "
+                    f"To analyse larger files, upgrade to the Business plan at 8,000 rupees per month "
+                    f"which supports up to 200 megabytes. "
+                    f"Contact pankaj at 1 click data analysis dot com to upgrade."
+                )
+                speak_tts(tts_msg)
                 st.stop()
 
     with tab_sheets:
@@ -6452,6 +7024,168 @@ def main():
     # ── Anomaly Detection Banner (runs immediately on load) ─────────────
     anomalies = detect_anomalies(df, found, domain)
     render_anomaly_banner(anomalies, domain)
+
+    # ── Voice Assistant ───────────────────────────────────────────────────
+    with st.expander("🎙️ Voice Assistant — Column Selection, Chart Requests & Column Mapping", expanded=False):
+        st.markdown("""
+<div style='background:rgba(139,92,246,0.06);border:1px solid rgba(139,92,246,0.2);
+border-radius:10px;padding:12px 16px;margin-bottom:10px;font-size:.82rem;color:#94a3b8;'>
+<strong style='color:#a78bfa;'>💡 What you can say:</strong><br>
+🗣️ <em>"Show me only Sales, Region, Product and Profit"</em> — selects those columns<br>
+🗣️ <em>"Give me a bar chart of Revenue"</em> — generates the chart instantly<br>
+🗣️ <em>"Sales Amount should be revenue column"</em> — maps a column<br>
+🗣️ <em>"How large a file can I upload?"</em> — speaks your plan limits
+</div>
+""", unsafe_allow_html=True)
+
+        # Store KEY_CATALOGUE keys for voice mapping parser
+        if "voice_input_main" not in st.session_state:
+            st.session_state["voice_input_main"] = ""
+
+        voice_result = render_voice_assistant(df, key_suffix="main")
+
+        # ── Process voice result ───────────────────────────────────────
+        if voice_result["action"] and voice_result["message"]:
+            # Show message
+            is_ok = voice_result["message"].startswith("✅")
+            if is_ok:
+                st.success(voice_result["message"])
+            elif voice_result["message"].startswith("❌"):
+                st.warning(voice_result["message"])
+            else:
+                st.info(voice_result["message"])
+
+            # Speak the TTS
+            if voice_result.get("tts"):
+                speak_tts(voice_result["tts"])
+
+            # Apply column selection → update found
+            if voice_result["action"] == "column_select" and voice_result["columns"]:
+                st.markdown(f"**Columns selected by voice:** `{'`, `'.join(voice_result['columns'])}`")
+                st.markdown("👇 These columns are highlighted in the Column Mapping section below.")
+                if "voice_selected_cols" not in st.session_state:
+                    st.session_state["voice_selected_cols"] = []
+                st.session_state["voice_selected_cols"] = voice_result["columns"]
+
+            # Apply column mapping
+            if voice_result["action"] == "column_map" and voice_result["mapping"]:
+                for key, col in voice_result["mapping"].items():
+                    if col in df.columns:
+                        found[key] = col
+                st.markdown("**Mappings applied:** " +
+                            ", ".join(f"`{v}` → `{k}`" for k,v in voice_result["mapping"].items()))
+
+            # Chart request — generate immediately
+            if voice_result["action"] == "chart" and voice_result.get("col_name"):
+                ct   = voice_result["chart_type"]
+                col  = voice_result["col_name"]
+                cur  = detect_currency(df)
+                ac   = DOMAIN_COLOR.get(domain, C["blue"])
+                st.markdown(f"**Generating {ct} chart for `{col}`:**")
+                try:
+                    if ct == "pie":
+                        vc = df[col].value_counts().head(8)
+                        fig = px.pie(values=vc.values, names=vc.index,
+                                     title=f"{col} — Distribution",
+                                     color_discrete_sequence=px.colors.sequential.Blues_r)
+                        fig.update_layout(**cd(320))
+                        st.plotly_chart(fig, use_container_width=True)
+                    elif ct == "bar":
+                        if pd.api.types.is_numeric_dtype(df[col]):
+                            num_cols_v = df.select_dtypes(include="number").columns.tolist()
+                            cat_cols_v = df.select_dtypes(include="object").columns.tolist()
+                            if cat_cols_v:
+                                grp = df.groupby(cat_cols_v[0])[col].sum().sort_values(ascending=False).head(15)
+                                fig = px.bar(x=grp.index, y=grp.values,
+                                             labels={"x":cat_cols_v[0],"y":col},
+                                             title=f"{col} by {cat_cols_v[0]}",
+                                             color=grp.values,
+                                             color_continuous_scale=["#1e3a5f", ac])
+                            else:
+                                fig = px.histogram(df, x=col, title=f"Distribution of {col}",
+                                                   color_discrete_sequence=[ac])
+                        else:
+                            vc = df[col].value_counts().head(15)
+                            fig = px.bar(x=vc.index, y=vc.values,
+                                         labels={"x":col,"y":"Count"},
+                                         title=f"{col} — Top Values",
+                                         color=vc.values,
+                                         color_continuous_scale=["#1e3a5f", ac])
+                        fig.update_layout(**cd(320))
+                        st.plotly_chart(fig, use_container_width=True)
+                    elif ct == "line":
+                        date_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])
+                                     or any(k in c.lower() for k in ["date","month","year","period"])]
+                        num_c2 = [c for c in df.select_dtypes(include="number").columns if c != col]
+                        if date_cols:
+                            dc_v = date_cols[0]
+                            y_col = col if pd.api.types.is_numeric_dtype(df[col]) else (num_c2[0] if num_c2 else col)
+                            fig = px.line(df.sort_values(dc_v), x=dc_v, y=y_col,
+                                          title=f"{y_col} Trend over {dc_v}",
+                                          color_discrete_sequence=[ac])
+                        else:
+                            fig = px.line(df.reset_index(), x="index", y=col,
+                                          title=f"{col} — Line Chart",
+                                          color_discrete_sequence=[ac])
+                        fig.update_layout(**cd(320))
+                        st.plotly_chart(fig, use_container_width=True)
+                    elif ct == "scatter":
+                        num_cols_sc = df.select_dtypes(include="number").columns.tolist()
+                        if len(num_cols_sc) >= 2:
+                            x_c = col if col in num_cols_sc else num_cols_sc[0]
+                            y_c = [c for c in num_cols_sc if c != x_c][0]
+                            fig = px.scatter(df, x=x_c, y=y_c,
+                                             title=f"{x_c} vs {y_c} — Scatter Plot",
+                                             color_discrete_sequence=[ac])
+                            fig.update_layout(**cd(320))
+                            st.plotly_chart(fig, use_container_width=True)
+                        else:
+                            st.warning("Scatter plot needs at least 2 numeric columns.")
+                    elif ct == "histogram":
+                        fig = px.histogram(df, x=col, title=f"Distribution of {col}",
+                                           color_discrete_sequence=[ac], nbins=30)
+                        fig.update_layout(**cd(300))
+                        st.plotly_chart(fig, use_container_width=True)
+                    elif ct == "heatmap":
+                        num_cols_hm = df.select_dtypes(include="number").columns.tolist()
+                        if len(num_cols_hm) >= 2:
+                            corr = df[num_cols_hm[:12]].corr()
+                            fig = px.imshow(corr, title="Correlation Heatmap",
+                                            color_continuous_scale="RdBu_r",
+                                            text_auto=".2f")
+                            fig.update_layout(**cd(420))
+                            st.plotly_chart(fig, use_container_width=True)
+                        else:
+                            st.warning("Heatmap needs at least 2 numeric columns.")
+                    elif ct == "area":
+                        date_cols_a = [c for c in df.columns if any(k in c.lower()
+                                       for k in ["date","month","year","period"])]
+                        y_col_a = col if pd.api.types.is_numeric_dtype(df[col]) else None
+                        if date_cols_a and y_col_a:
+                            fig = px.area(df.sort_values(date_cols_a[0]),
+                                          x=date_cols_a[0], y=y_col_a,
+                                          title=f"{y_col_a} — Area Chart",
+                                          color_discrete_sequence=[ac])
+                            fig.update_layout(**cd(300))
+                            st.plotly_chart(fig, use_container_width=True)
+                        else:
+                            st.warning("Area chart works best with a date column + numeric column.")
+                    elif ct == "treemap":
+                        cat_cols_tm = df.select_dtypes(include="object").columns.tolist()
+                        num_cols_tm = df.select_dtypes(include="number").columns.tolist()
+                        if cat_cols_tm and num_cols_tm:
+                            val_col = num_cols_tm[0]
+                            fig = px.treemap(df, path=[cat_cols_tm[0]],
+                                             values=val_col,
+                                             title=f"Treemap: {cat_cols_tm[0]} by {val_col}",
+                                             color=val_col,
+                                             color_continuous_scale=["#1e3a5f", ac])
+                            fig.update_layout(**cd(380))
+                            st.plotly_chart(fig, use_container_width=True)
+                        else:
+                            st.warning("Treemap needs a categorical and a numeric column.")
+                except Exception as e:
+                    st.error(f"Chart error: {e}")
 
     # ── Column Mapping & Domain Override ────────────────────────────────────
     with st.expander("⚙️ Column Mapping & Domain Override", expanded=False):
