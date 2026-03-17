@@ -75,566 +75,777 @@ Read live data from any Google Sheet — no download needed.
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  🎙️ VOICE ASSISTANT ENGINE — Phase 1 + Phase 2
-#  Phase 1: File size voice alert + Chart suitability rules
-#  Phase 2: Voice column selection + Voice column mapping + Voice chart requests
+#  🎙️ VOICE ASSISTANT ENGINE v2 — Robust Edition
+#  Features:
+#   • Continuous listening with auto-restart
+#   • Multi-turn conversational memory (context window)
+#   • Better Indian accent accuracy (multiple alternatives)
+#   • Animated waveform while listening
+#   • Voice history log (last 5 commands)
+#   • Per-engine mini voice buttons
+#   • Confidence-based fuzzy matching with "Did you mean?" fallback
+#   • Full TTS confirmation after every action
 # ══════════════════════════════════════════════════════════════════════════════
 
 import difflib as _difflib
 
-# ── Chart Suitability Rules ───────────────────────────────────────────────────
+# ── Chart Suitability Rules ────────────────────────────────────────────────────
 CHART_RULES = {
-    "pie": {
-        "needs": ["one categorical column"],
-        "max_unique": 8,
-        "best_for": "Part-of-whole with ≤8 categories",
-        "not_for": "High cardinality columns, numeric continuous data, time series",
-        "alternatives": {"high_cardinality": "bar", "numeric": "histogram", "time": "line"},
-    },
-    "bar": {
-        "needs": ["one categorical column"],
-        "max_unique": 50,
-        "best_for": "Comparing categories, rankings, counts",
-        "not_for": "Time series with many points (use line chart)",
-        "alternatives": {"time": "line", "two_numeric": "scatter"},
-    },
-    "line": {
-        "needs": ["date or ordered column"],
-        "best_for": "Trends over time, continuous changes",
-        "not_for": "Unordered categories, single data point",
-        "alternatives": {"no_date": "bar", "categorical": "bar"},
-    },
-    "scatter": {
-        "needs": ["two numeric columns"],
-        "best_for": "Correlation between two numeric variables",
-        "not_for": "Single column, categorical data",
-        "alternatives": {"single_col": "histogram", "categorical": "bar"},
-    },
-    "heatmap": {
-        "needs": ["two categorical columns + one numeric"],
-        "best_for": "Cross-tabulation, correlation matrix",
-        "not_for": "Single column data",
-        "alternatives": {"single_col": "bar"},
-    },
-    "histogram": {
-        "needs": ["one numeric column"],
-        "best_for": "Distribution of a numeric variable",
-        "not_for": "Categorical columns",
-        "alternatives": {"categorical": "bar"},
-    },
-    "area": {
-        "needs": ["date or time column + numeric"],
-        "best_for": "Cumulative trends over time",
-        "not_for": "Categorical data without time axis",
-        "alternatives": {"no_date": "bar"},
-    },
-    "treemap": {
-        "needs": ["one categorical + one numeric"],
-        "best_for": "Hierarchical part-of-whole relationships",
-        "not_for": "Non-hierarchical or equal-value data",
-        "alternatives": {"flat": "pie"},
-    },
-    "3d": {
-        "needs": ["three columns: two categorical/numeric + one numeric"],
-        "best_for": "Multi-dimensional comparisons",
-        "not_for": "Simple two-column data (overkill)",
-        "alternatives": {"simple": "bar"},
-    },
-    "decision_tree": {
-        "needs": ["multiple columns including a target/label column"],
-        "best_for": "Classification logic, prediction explanation",
-        "not_for": "Purely descriptive analysis without a target column",
-        "alternatives": {"no_target": "scatter"},
-    },
+    "pie":      {"max_unique":8,  "needs_numeric":False, "needs_date":False,
+                 "best_for":"Part-of-whole with ≤8 categories",
+                 "not_for":"High cardinality or numeric continuous data"},
+    "bar":      {"max_unique":50, "needs_numeric":False, "needs_date":False,
+                 "best_for":"Comparing categories, rankings, counts",
+                 "not_for":"Time series with many points"},
+    "line":     {"max_unique":None,"needs_numeric":True, "needs_date":True,
+                 "best_for":"Trends over time, continuous changes",
+                 "not_for":"Unordered categories without a time axis"},
+    "scatter":  {"max_unique":None,"needs_numeric":True, "needs_date":False,
+                 "best_for":"Correlation between two numeric variables",
+                 "not_for":"Single or categorical columns"},
+    "heatmap":  {"max_unique":None,"needs_numeric":True, "needs_date":False,
+                 "best_for":"Correlation matrix of numeric columns",
+                 "not_for":"Single column datasets"},
+    "histogram":{"max_unique":None,"needs_numeric":True, "needs_date":False,
+                 "best_for":"Distribution of a numeric variable",
+                 "not_for":"Categorical columns"},
+    "area":     {"max_unique":None,"needs_numeric":True, "needs_date":True,
+                 "best_for":"Cumulative trends over time",
+                 "not_for":"Categorical data without time axis"},
+    "treemap":  {"max_unique":None,"needs_numeric":False,"needs_date":False,
+                 "best_for":"Hierarchical part-of-whole relationships",
+                 "not_for":"Non-hierarchical flat data"},
+    "3d":       {"max_unique":None,"needs_numeric":True, "needs_date":False,
+                 "best_for":"Multi-dimensional comparisons",
+                 "not_for":"Simple two-column data"},
+    "decision_tree":{"max_unique":None,"needs_numeric":False,"needs_date":False,
+                 "best_for":"Classification logic and prediction explanation",
+                 "not_for":"Purely descriptive analysis"},
+}
+
+CHART_ALIASES = {
+    "column chart":"bar","column":"bar","vertical bar":"bar","horizontal bar":"bar",
+    "bar chart":"bar","barchart":"bar",
+    "donut":"pie","doughnut":"pie","pie chart":"pie",
+    "trend":"line","trend chart":"line","line chart":"line","sparkline":"line",
+    "3d column":"3d","3d bar":"3d","3 d":"3d","three d":"3d","2d column":"bar",
+    "heat map":"heatmap","heat":"heatmap","heatmap chart":"heatmap","correlation":"heatmap",
+    "tree map":"treemap","tree":"treemap","treemap chart":"treemap",
+    "dot plot":"scatter","bubble":"scatter","scatter plot":"scatter","scatter chart":"scatter",
+    "area chart":"area","stacked area":"area",
+    "histogram chart":"histogram","distribution":"histogram","dist":"histogram",
+    "decision tree":"decision_tree","tree diagram":"decision_tree",
 }
 
 def check_chart_suitability(chart_type, col_name, df):
-    """
-    Returns (is_suitable: bool, message: str, recommended_chart: str)
-    Checks if a chart type is appropriate for the given column.
-    """
-    chart_type = chart_type.lower().strip()
-    # Normalise aliases
-    aliases = {
-        "column chart": "bar", "column": "bar", "vertical bar": "bar",
-        "horizontal bar": "bar", "donut": "pie", "doughnut": "pie",
-        "trend": "line", "trend chart": "line", "sparkline": "line",
-        "3d column": "3d", "3d bar": "3d", "2d column": "bar",
-        "heat map": "heatmap", "heat": "heatmap",
-        "tree map": "treemap", "tree": "treemap",
-        "dot plot": "scatter", "bubble": "scatter",
-    }
-    chart_type = aliases.get(chart_type, chart_type)
-
+    """Returns (is_suitable, message, recommended_chart)."""
+    ct = CHART_ALIASES.get(chart_type.lower().strip(), chart_type.lower().strip())
     if col_name not in df.columns:
-        # Fuzzy match column name
-        matches = _difflib.get_close_matches(col_name, df.columns.tolist(), n=1, cutoff=0.4)
-        if matches:
-            col_name = matches[0]
-        else:
-            return False, f"Column '{col_name}' not found in dataset.", "bar"
+        close = _difflib.get_close_matches(col_name, df.columns.tolist(), n=1, cutoff=0.4)
+        if close: col_name = close[0]
+        else: return False, f"Column '{col_name}' not found in dataset.", "bar"
 
-    col = df[col_name]
-    is_numeric   = pd.api.types.is_numeric_dtype(col)
-    is_datetime  = pd.api.types.is_datetime64_any_dtype(col)
+    col          = df[col_name]
+    is_num       = pd.api.types.is_numeric_dtype(col)
+    is_dt        = pd.api.types.is_datetime64_any_dtype(col)
     has_date_kw  = any(k in col_name.lower() for k in ["date","time","month","year","period","week"])
     n_unique     = col.nunique()
-    n_rows       = len(col)
-    cardinality_pct = n_unique / n_rows * 100 if n_rows > 0 else 0
 
-    rule = CHART_RULES.get(chart_type)
-    if not rule:
-        return True, f"✅ Chart type '{chart_type}' — no specific rules, generating chart.", chart_type
-
-    # ── PIE ──
-    if chart_type == "pie":
-        if is_numeric and not is_datetime:
-            msg = (f"❌ **Pie chart not ideal for '{col_name}'** — it's a numeric column with "
-                   f"{n_unique} unique values. Pie charts show category shares, not numeric distributions. "
-                   f"**Recommended: Histogram** to see the distribution of values.")
-            return False, msg, "histogram"
+    if ct == "pie":
+        if is_num:
+            return False, (f"❌ **Pie chart not ideal for '{col_name}'** — it's numeric with {n_unique} values. "
+                           f"Pie shows category shares, not distributions. **Recommended: Histogram.**"), "histogram"
         if n_unique > 8:
-            msg = (f"❌ **Pie chart not ideal for '{col_name}'** — it has **{n_unique} unique categories** "
-                   f"({cardinality_pct:.0f}% cardinality). A pie chart with {n_unique} slices would be "
-                   f"unreadable. **Recommended: Bar chart** showing Top 10 categories by count.")
-            return False, msg, "bar"
-        msg = f"✅ **Pie chart is perfect for '{col_name}'** — {n_unique} categories, ideal for showing proportions."
-        return True, msg, "pie"
+            return False, (f"❌ **Pie chart not ideal for '{col_name}'** — {n_unique} unique categories would create "
+                           f"an unreadable chart. **Recommended: Bar chart** showing Top 10 by count."), "bar"
+        return True, f"✅ **Pie chart is perfect** — '{col_name}' has {n_unique} categories, ideal for proportions.", "pie"
 
-    # ── LINE ──
-    if chart_type == "line":
-        if not is_datetime and not has_date_kw and not is_numeric:
-            msg = (f"❌ **Line chart not ideal for '{col_name}'** — it's a categorical column without a "
-                   f"time axis. Line charts show trends over ordered sequences. "
-                   f"**Recommended: Bar chart** for comparing categories.")
-            return False, msg, "bar"
-        if is_datetime or has_date_kw:
-            msg = f"✅ **Line chart is perfect for '{col_name}'** — it's a date/time column, ideal for trend analysis."
-            return True, msg, "line"
-        msg = f"✅ **Line chart works for '{col_name}'** — numeric sequence detected."
-        return True, msg, "line"
+    if ct == "line":
+        if not is_dt and not has_date_kw:
+            return False, (f"❌ **Line chart not ideal for '{col_name}'** — no time/date axis found. "
+                           f"**Recommended: Bar chart** for categorical comparison."), "bar"
+        return True, f"✅ **Line chart is perfect** — '{col_name}' is a time/date column.", "line"
 
-    # ── SCATTER ──
-    if chart_type == "scatter":
-        if not is_numeric:
-            msg = (f"❌ **Scatter plot not ideal for '{col_name}'** — scatter plots need two numeric "
-                   f"columns to show correlation. '{col_name}' is {'text' if not is_numeric else 'numeric'}. "
-                   f"**Recommended: Bar chart** for categorical comparison.")
-            return False, msg, "bar"
-        msg = f"✅ **Scatter plot works for '{col_name}'** — numeric column detected. Pick a second numeric column for the Y axis."
-        return True, msg, "scatter"
+    if ct == "scatter":
+        if not is_num:
+            return False, (f"❌ **Scatter plot needs numeric columns.** '{col_name}' is categorical. "
+                           f"**Recommended: Bar chart.**"), "bar"
+        return True, f"✅ **Scatter plot works** — '{col_name}' is numeric. Pick a second numeric column for Y axis.", "scatter"
 
-    # ── BAR / HISTOGRAM ──
-    if chart_type in ["bar", "histogram"]:
-        if chart_type == "histogram" and not is_numeric:
-            msg = (f"❌ **Histogram not ideal for '{col_name}'** — histograms show distribution of "
-                   f"numeric data. '{col_name}' is categorical. **Recommended: Bar chart** for category counts.")
-            return False, msg, "bar"
-        msg = f"✅ **{'Bar chart' if chart_type == 'bar' else 'Histogram'} is perfect for '{col_name}'**."
-        return True, msg, chart_type
+    if ct == "histogram":
+        if not is_num:
+            return False, (f"❌ **Histogram needs numeric data.** '{col_name}' is categorical. "
+                           f"**Recommended: Bar chart.**"), "bar"
+        return True, f"✅ **Histogram is perfect** for '{col_name}' — shows value distribution.", "histogram"
 
-    # ── HEATMAP ──
-    if chart_type == "heatmap":
-        if is_numeric:
-            msg = f"✅ **Heatmap works for '{col_name}'** — will create a correlation heatmap with all numeric columns."
-            return True, msg, "heatmap"
-        msg = (f"⚠️ **Heatmap works best with numeric data or a pair of categoricals.** "
-               f"'{col_name}' is categorical — will use it as one axis. Pick a numeric value column for the heatmap values.")
-        return True, msg, "heatmap"
+    if ct == "area":
+        if not is_dt and not has_date_kw:
+            return False, (f"❌ **Area chart needs a date/time column.** '{col_name}' has no time axis. "
+                           f"**Recommended: Bar chart.**"), "bar"
+        return True, f"✅ **Area chart works** — '{col_name}' is a time column.", "area"
 
-    return True, f"✅ **{chart_type.title()} chart** — generating for '{col_name}'.", chart_type
+    if ct == "heatmap":
+        return True, f"✅ **Heatmap** — will generate correlation matrix of all numeric columns.", "heatmap"
+
+    if ct in ["treemap","3d","decision_tree","bar"]:
+        return True, f"✅ **{ct.title()} chart** — generating for '{col_name}'.", ct
+
+    return True, f"✅ **{ct.title()} chart** — generating.", ct
 
 
-def fuzzy_match_columns(spoken_text, df_columns):
+def fuzzy_match_columns(spoken_text, df_columns, cutoff=0.65):
     """
-    Takes a voice transcript and returns a list of matched column names.
-    Handles partial matches, case insensitivity, underscore/space variants.
+    Multi-pass fuzzy column matcher.
+    Returns list of (matched_col, confidence_score) sorted by confidence.
     """
-    spoken_lower  = spoken_text.lower()
-    col_map       = {c.lower().replace("_"," "): c for c in df_columns}
-    col_map.update({c.lower(): c for c in df_columns})
-    matched = []
+    spoken_lower = spoken_text.lower()
+    col_variants = {}  # orig_col -> [norm variants]
+    for c in df_columns:
+        variants = [
+            c.lower(),
+            c.lower().replace("_"," "),
+            c.lower().replace("-"," "),
+            c.lower().replace("_",""),
+        ]
+        col_variants[c] = variants
 
-    # Pass 1: exact/substring match
-    for norm_col, orig_col in col_map.items():
-        if norm_col in spoken_lower and orig_col not in matched:
-            matched.append(orig_col)
+    matched = {}  # col -> score
 
-    # Pass 2: fuzzy match on words
-    words = spoken_lower.replace(",","").replace("and","").split()
+    # Pass 1: exact / substring
+    for col, variants in col_variants.items():
+        for v in variants:
+            if v in spoken_lower and len(v) >= 3:
+                matched[col] = max(matched.get(col, 0), 1.0)
+                break
+
+    # Pass 2: word + bigram fuzzy
+    words   = spoken_lower.replace(","," ").replace(" and "," ").split()
     bigrams = [f"{words[i]} {words[i+1]}" for i in range(len(words)-1)]
-    tokens  = words + bigrams
+    tokens  = [t for t in words + bigrams if len(t) >= 3]
+
     for token in tokens:
-        if len(token) < 3: continue
-        close = _difflib.get_close_matches(token, list(col_map.keys()), n=1, cutoff=0.75)
-        if close:
-            orig = col_map[close[0]]
-            if orig not in matched:
-                matched.append(orig)
+        for col, variants in col_variants.items():
+            if col in matched and matched[col] >= 1.0:
+                continue
+            for v in variants:
+                ratio = _difflib.SequenceMatcher(None, token, v).ratio()
+                if ratio >= cutoff:
+                    matched[col] = max(matched.get(col, 0), ratio)
 
-    return matched
+    # Sort by confidence descending
+    return sorted(matched.items(), key=lambda x: -x[1])
 
 
-def parse_voice_column_mapping(transcript, df_columns, key_catalogue):
+def parse_voice_column_mapping(transcript, df_columns):
     """
-    Parses phrases like:
+    Parses mapping phrases like:
     - "Sales Amount should be revenue"
     - "Joining Date is hire date"
-    - "Department Name map to department"
-    Returns dict of {key: column_name} to update in found/session_state
+    - "map Department Name to department"
+    Returns {key: column_name}
     """
-    mappings = {}
-    transcript_lower = transcript.lower()
-
-    # Known mapping keys and their aliases
-    key_aliases = {
-        "sales": ["sales","revenue","income","turnover"],
-        "profit": ["profit","margin","earnings"],
-        "quantity": ["quantity","qty","units","volume"],
-        "salary": ["salary","pay","ctc","wage","compensation"],
-        "department": ["department","dept","division","team"],
-        "attrition": ["attrition","left","churn","resigned"],
-        "hire_date": ["hire date","joining date","start date","doj","date of joining"],
-        "date": ["date","transaction date","order date","sale date"],
-        "customer": ["customer","client","buyer","account"],
-        "product": ["product","item","sku","goods"],
-        "region": ["region","territory","zone","area"],
-        "category": ["category","product group","type"],
-        "employee_id": ["employee id","emp id","staff id"],
-        "employee_name": ["employee name","staff name","emp name"],
-        "job_title": ["job title","designation","position","role"],
-        "gender": ["gender","sex"],
-        "age": ["age","years old"],
-        "tenure": ["tenure","experience","years of service"],
-        "spend": ["spend","ad spend","marketing cost","budget"],
-        "impressions": ["impressions","views","reach"],
-        "clicks": ["clicks","click"],
-        "conversions": ["conversions","leads","sign ups"],
-        "fraud_label": ["fraud","is fraud","fraudulent","label","class"],
+    KEY_ALIASES = {
+        "sales":        ["sales","revenue","income","turnover","sales amount","total sales"],
+        "profit":       ["profit","margin","earnings","net profit","gross profit"],
+        "quantity":     ["quantity","qty","units","volume","units sold"],
+        "salary":       ["salary","pay","ctc","wage","compensation","monthly salary"],
+        "department":   ["department","dept","division","team","business unit"],
+        "attrition":    ["attrition","left","churn","resigned","turnover","exit"],
+        "hire_date":    ["hire date","joining date","start date","doj","date of joining","employment date"],
+        "date":         ["date","transaction date","order date","sale date","invoice date"],
+        "customer":     ["customer","client","buyer","account","customer name"],
+        "product":      ["product","item","sku","goods","product name","item name"],
+        "region":       ["region","territory","zone","area","geography"],
+        "category":     ["category","product group","type","product category"],
+        "employee_id":  ["employee id","emp id","staff id","employee number"],
+        "employee_name":["employee name","staff name","emp name","full name"],
+        "job_title":    ["job title","designation","position","role","title"],
+        "gender":       ["gender","sex"],
+        "age":          ["age","years old","employee age"],
+        "tenure":       ["tenure","experience","years of service","service years"],
+        "spend":        ["spend","ad spend","marketing cost","budget","marketing spend"],
+        "impressions":  ["impressions","views","reach","ad views"],
+        "clicks":       ["clicks","click","link clicks"],
+        "conversions":  ["conversions","leads","sign ups","goals"],
+        "fraud_label":  ["fraud","is fraud","fraudulent","label","class","fraud flag"],
+        "payment":      ["payment","payment method","mode of payment","pay mode"],
+        "store":        ["store","branch","outlet","shop"],
+        "satisfaction": ["satisfaction","rating","nps","csat","score","review"],
+        "returns":      ["returns","return","refund","returned"],
+        "delivery":     ["delivery","delivery time","shipping","lead time","tat"],
     }
 
-    patterns = [" is ", " should be ", " map to ", " as ", " = "]
+    mappings  = {}
+    t_lower   = transcript.lower()
+    patterns  = [" is ", " should be ", " map to ", " as my ", " as ", " = ", " maps to "]
 
     for pattern in patterns:
-        if pattern in transcript_lower:
-            parts = transcript_lower.split(pattern)
-            if len(parts) >= 2:
-                col_part = parts[0].strip().split()[-3:]  # last 3 words
-                key_part = parts[1].strip().split()[:3]   # first 3 words
-                col_text = " ".join(col_part)
-                key_text = " ".join(key_part)
+        if pattern not in t_lower:
+            continue
+        parts    = t_lower.split(pattern)
+        col_text = parts[0].strip().split()
+        key_text = parts[1].strip().split()[:5]
+        col_phrase = " ".join(col_text[-4:])   # last 4 words before pattern
+        key_phrase = " ".join(key_text[:4])    # first 4 words after pattern
 
-                # Match column
-                col_matches = fuzzy_match_columns(col_text, df_columns)
-                if not col_matches:
-                    continue
-                matched_col = col_matches[0]
+        # Match column from dataset
+        col_matches = fuzzy_match_columns(col_phrase, df_columns, cutoff=0.6)
+        if not col_matches:
+            continue
+        best_col, score = col_matches[0]
+        if score < 0.55:
+            continue
 
-                # Match key
-                for key, aliases in key_aliases.items():
-                    if any(alias in key_text for alias in aliases):
-                        if key in [k for k in key_catalogue.keys()]:
-                            mappings[key] = matched_col
-                        break
+        # Match key from our catalogue
+        for key, aliases in KEY_ALIASES.items():
+            if any(alias in key_phrase for alias in aliases) or \
+               any(_difflib.SequenceMatcher(None, alias, key_phrase).ratio() > 0.7 for alias in aliases):
+                mappings[key] = best_col
+                break
 
     return mappings
 
 
-# ── Voice UI Component ────────────────────────────────────────────────────────
-VOICE_JS = """
-<div id="voice-assistant-wrap" style="
-    background: linear-gradient(135deg, rgba(14,165,233,0.08), rgba(139,92,246,0.05));
-    border: 1px solid rgba(14,165,233,0.3);
-    border-radius: 14px;
-    padding: 16px 20px;
-    margin-bottom: 16px;
-    position: relative;
-">
-  <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
-    <div id="mic-icon" style="font-size:1.4rem;">🎙️</div>
+# ── Conversational Context Manager ────────────────────────────────────────────
+class VoiceConversation:
+    """Maintains multi-turn dialogue context across voice commands."""
+
+    CONTEXT_KEYS = ["last_columns", "last_chart", "last_col_name", "last_action",
+                    "pending_confirm", "history"]
+
+    @staticmethod
+    def get():
+        if "voice_ctx" not in st.session_state:
+            st.session_state.voice_ctx = {k: None for k in VoiceConversation.CONTEXT_KEYS}
+            st.session_state.voice_ctx["history"] = []
+        return st.session_state.voice_ctx
+
+    @staticmethod
+    def update(**kwargs):
+        ctx = VoiceConversation.get()
+        ctx.update(kwargs)
+
+    @staticmethod
+    def add_history(command, result):
+        ctx = VoiceConversation.get()
+        ctx["history"] = (ctx["history"] or [])[-4:]  # keep last 5
+        ctx["history"].append({"cmd": command, "result": result})
+
+    @staticmethod
+    def resolve_pronoun(transcript, df_columns):
+        """
+        Resolves pronouns/references like "it", "that column", "the same one",
+        "add that too" using previous context.
+        """
+        ctx = VoiceConversation.get()
+        t   = transcript.lower()
+        pronouns = ["it", "that", "this column", "the same", "that one", "this one", "that column"]
+        if any(p in t for p in pronouns) and ctx.get("last_col_name"):
+            return transcript.replace("it", ctx["last_col_name"])\
+                             .replace("that column", ctx["last_col_name"])\
+                             .replace("that one", ctx["last_col_name"])\
+                             .replace("this column", ctx["last_col_name"])
+
+        # "add X too" / "also add X" / "and X"
+        additive = ["add", "also", "too", "as well", "and also", "plus"]
+        if any(a in t for a in additive) and ctx.get("last_columns"):
+            extra = fuzzy_match_columns(transcript, df_columns)
+            if extra:
+                all_cols = list(ctx["last_columns"]) + [c for c,_ in extra if c not in ctx["last_columns"]]
+                return "show me " + " ".join(all_cols)
+
+        # "remove X" / "exclude X"
+        remove_kw = ["remove", "exclude", "not", "without", "drop"]
+        if any(r in t for r in remove_kw) and ctx.get("last_columns"):
+            to_remove = fuzzy_match_columns(transcript, df_columns)
+            if to_remove:
+                rm_cols = [c for c,_ in to_remove]
+                remaining = [c for c in ctx["last_columns"] if c not in rm_cols]
+                if remaining:
+                    return "show me " + " ".join(remaining)
+
+        return transcript
+
+
+# ── The Robust Voice JS ────────────────────────────────────────────────────────
+def _build_voice_js(engine_key="main", placeholder_cmds=None, height=160):
+    if placeholder_cmds is None:
+        placeholder_cmds = [
+            '"Show me Sales, Profit and Region"',
+            '"Give me a bar chart of Revenue"',
+            '"Sales Amount is revenue column"',
+            '"How large a file can I upload?"',
+            '"Add Profit too"  (after a previous command)',
+        ]
+    examples_html = "".join(f"<li>{c}</li>" for c in placeholder_cmds)
+    uid = engine_key.replace(" ","_").replace("-","_")
+
+    return f"""
+<style>
+#{uid}_wrap {{
+  background: linear-gradient(135deg,rgba(14,165,233,0.07),rgba(139,92,246,0.04));
+  border: 1px solid rgba(14,165,233,0.28);
+  border-radius: 14px;
+  padding: 14px 18px 10px;
+  font-family: 'DM Sans',sans-serif;
+  position: relative;
+}}
+#{uid}_header {{ display:flex; align-items:center; gap:10px; margin-bottom:10px; }}
+#{uid}_icon {{ font-size:1.3rem; transition:all .3s; }}
+#{uid}_title {{ font-weight:700; color:#e2e8f0; font-size:.88rem; }}
+#{uid}_sub   {{ font-size:.72rem; color:#64748b; }}
+#{uid}_btn {{
+  margin-left:auto;
+  background:rgba(14,165,233,0.13);
+  border:1px solid rgba(14,165,233,0.38);
+  color:#0ea5e9; border-radius:9px;
+  padding:7px 16px; cursor:pointer;
+  font-weight:700; font-size:.8rem;
+  transition:all .2s;
+}}
+#{uid}_btn:hover {{ background:rgba(14,165,233,0.22); }}
+#{uid}_wave {{
+  display:none; align-items:center; gap:3px;
+  height:20px; margin-left:8px;
+}}
+#{uid}_wave span {{
+  display:inline-block; width:3px; border-radius:2px;
+  background:#0ea5e9; animation:wave_{uid} 1.2s ease-in-out infinite;
+}}
+#{uid}_wave span:nth-child(2) {{ animation-delay:.1s; }}
+#{uid}_wave span:nth-child(3) {{ animation-delay:.2s; }}
+#{uid}_wave span:nth-child(4) {{ animation-delay:.3s; }}
+#{uid}_wave span:nth-child(5) {{ animation-delay:.4s; }}
+@keyframes wave_{uid} {{
+  0%,100% {{ height:4px; opacity:.4; }}
+  50%      {{ height:18px; opacity:1; }}
+}}
+#{uid}_status {{
+  font-size:.78rem; color:#64748b;
+  padding:5px 10px;
+  background:rgba(0,0,0,0.18);
+  border-radius:7px; min-height:24px;
+  margin-bottom:6px;
+}}
+#{uid}_transcript {{
+  font-size:.8rem; color:#94a3b8; min-height:18px;
+  margin-bottom:4px;
+}}
+#{uid}_history {{
+  font-size:.72rem; color:#475569;
+  border-top:1px solid rgba(255,255,255,0.05);
+  padding-top:6px; margin-top:6px;
+  max-height:80px; overflow-y:auto;
+  display:none;
+}}
+#{uid}_examples {{
+  font-size:.72rem; color:#475569;
+  padding:6px 0 2px;
+}}
+#{uid}_examples ul {{ margin:0; padding-left:16px; }}
+#{uid}_examples li {{ margin-bottom:2px; color:#64748b; }}
+</style>
+
+<div id="{uid}_wrap">
+  <div id="{uid}_header">
+    <div id="{uid}_icon">🎙️</div>
     <div>
-      <div style="font-weight:700;color:#e2e8f0;font-size:.9rem;">Voice Assistant</div>
-      <div style="font-size:.75rem;color:#64748b;">Chrome/Edge only · Click mic and speak</div>
+      <div id="{uid}_title">Voice Assistant</div>
+      <div id="{uid}_sub">Chrome / Edge only · en-IN</div>
     </div>
-    <button id="mic-btn" onclick="toggleVoice()" style="
-        margin-left:auto;
-        background: rgba(14,165,233,0.15);
-        border: 1px solid rgba(14,165,233,0.4);
-        color: #0ea5e9; border-radius: 10px;
-        padding: 8px 18px; cursor: pointer;
-        font-weight: 700; font-size: .82rem;
-        transition: all 0.2s;
-    ">🎙️ Start Listening</button>
+    <div id="{uid}_wave">
+      <span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <button id="{uid}_btn" onclick="va_{uid}_toggle()">🎙️ Listen</button>
   </div>
 
-  <div id="voice-status" style="
-      font-size:.8rem; color:#64748b;
-      padding: 6px 10px;
-      background: rgba(0,0,0,0.2);
-      border-radius: 8px;
-      min-height: 28px;
-  ">Say: &quot;show me Sales, Region, Profit&quot; · &quot;give me a bar chart of Revenue&quot; · &quot;Sales Amount is revenue column&quot;</div>
+  <div id="{uid}_status">Try: "Show me Sales and Profit" · "Bar chart of Revenue" · "Remove Region"</div>
+  <div id="{uid}_transcript"></div>
+  <div id="{uid}_history"></div>
 
-  <div id="voice-transcript" style="
-      margin-top: 8px;
-      font-size:.82rem; color:#94a3b8;
-      min-height: 20px;
-  "></div>
+  <div id="{uid}_examples">
+    <strong style="color:#475569;">💡 Example commands:</strong>
+    <ul>{examples_html}</ul>
+  </div>
 </div>
 
 <script>
-var recognition = null;
-var isListening = false;
+(function() {{
+  var uid = "{uid}";
+  var recognition_{uid} = null;
+  var listening_{uid}   = false;
+  var history_{uid}     = [];
+  var restartTimer_{uid} = null;
+  var isContinuous_{uid} = false;  // switched to true after first command
 
-function toggleVoice() {
-  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-    document.getElementById('voice-status').innerHTML =
-      '❌ Voice not supported in this browser. Please use Chrome or Edge.';
-    document.getElementById('voice-status').style.color = '#ef4444';
-    return;
-  }
+  function va_{uid}_toggle() {{
+    if (listening_{uid}) {{
+      va_{uid}_stop();
+    }} else {{
+      va_{uid}_start();
+    }}
+  }}
+  // expose globally
+  window["va_{uid}_toggle"] = va_{uid}_toggle;
 
-  if (isListening) {
-    stopListening();
-  } else {
-    startListening();
-  }
-}
+  function va_{uid}_start() {{
+    if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {{
+      document.getElementById(uid+"_status").innerHTML =
+        "❌ Voice not supported. Please use Chrome or Edge.";
+      document.getElementById(uid+"_status").style.color = "#ef4444";
+      return;
+    }}
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    recognition_{uid} = new SR();
+    recognition_{uid}.lang = "en-IN";
+    recognition_{uid}.continuous = false;       // false = more reliable on mobile
+    recognition_{uid}.interimResults = true;
+    recognition_{uid}.maxAlternatives = 3;      // get top 3 alternatives for accuracy
 
-function startListening() {
-  var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  recognition = new SpeechRecognition();
-  recognition.lang = 'en-IN';
-  recognition.continuous = false;
-  recognition.interimResults = true;
-  recognition.maxAlternatives = 1;
+    recognition_{uid}.onstart = function() {{
+      listening_{uid} = true;
+      document.getElementById(uid+"_btn").innerHTML = "⏹️ Stop";
+      document.getElementById(uid+"_btn").style.background = "rgba(239,68,68,0.18)";
+      document.getElementById(uid+"_btn").style.borderColor = "rgba(239,68,68,0.45)";
+      document.getElementById(uid+"_btn").style.color = "#ef4444";
+      document.getElementById(uid+"_icon").innerHTML = "🔴";
+      document.getElementById(uid+"_wave").style.display = "flex";
+      document.getElementById(uid+"_status").innerHTML = "🎙️ Listening… speak clearly";
+      document.getElementById(uid+"_status").style.color = "#0ea5e9";
+      document.getElementById(uid+"_examples").style.display = "none";
+    }};
 
-  recognition.onstart = function() {
-    isListening = true;
-    document.getElementById('mic-btn').innerHTML = '⏹️ Stop';
-    document.getElementById('mic-btn').style.background = 'rgba(239,68,68,0.2)';
-    document.getElementById('mic-btn').style.borderColor = 'rgba(239,68,68,0.5)';
-    document.getElementById('mic-btn').style.color = '#ef4444';
-    document.getElementById('mic-icon').innerHTML = '🔴';
-    document.getElementById('voice-status').innerHTML = '🎙️ Listening... speak now';
-    document.getElementById('voice-status').style.color = '#0ea5e9';
-  };
+    recognition_{uid}.onresult = function(e) {{
+      // Collect all alternatives for best accuracy
+      var finals   = "";
+      var interim  = "";
+      for (var i = e.resultIndex; i < e.results.length; i++) {{
+        if (e.results[i].isFinal) {{
+          // Pick alternative with highest confidence
+          var best = e.results[i][0].transcript;
+          var bestConf = e.results[i][0].confidence || 0;
+          for (var a = 1; a < e.results[i].length; a++) {{
+            if ((e.results[i][a].confidence || 0) > bestConf) {{
+              best = e.results[i][a].transcript;
+              bestConf = e.results[i][a].confidence || 0;
+            }}
+          }}
+          finals += best + " ";
+        }} else {{
+          interim += e.results[i][0].transcript;
+        }}
+      }}
+      var display = finals || interim;
+      document.getElementById(uid+"_transcript").innerHTML =
+        "<span style='color:#64748b'>Heard: </span>" +
+        "<span style='color:#e2e8f0'>" + display + "</span>";
 
-  recognition.onresult = function(event) {
-    var transcript = '';
-    for (var i = event.resultIndex; i < event.results.length; i++) {
-      transcript += event.results[i][0].transcript;
-    }
-    document.getElementById('voice-transcript').innerHTML =
-      '<span style="color:#64748b">Heard: </span><span style="color:#e2e8f0">' + transcript + '</span>';
+      if (finals.trim()) {{
+        va_{uid}_send(finals.trim());
+      }}
+    }};
 
-    if (event.results[event.results.length-1].isFinal) {
-      sendToStreamlit(transcript);
-    }
-  };
+    recognition_{uid}.onerror = function(e) {{
+      var msgs = {{
+        "not-allowed":  "❌ Mic denied. Allow microphone access in browser settings.",
+        "no-speech":    "⚠️ Nothing heard. Try again.",
+        "network":      "⚠️ Network issue. Check connection.",
+        "audio-capture":"❌ No microphone found.",
+        "aborted":      "ℹ️ Stopped.",
+      }};
+      document.getElementById(uid+"_status").innerHTML = msgs[e.error] || "⚠️ " + e.error;
+      document.getElementById(uid+"_status").style.color = "#f59e0b";
+      va_{uid}_resetUI();
+    }};
 
-  recognition.onerror = function(event) {
-    var msgs = {
-      'not-allowed': '❌ Mic access denied. Please allow microphone in browser settings.',
-      'no-speech':   '⚠️ No speech detected. Try again.',
-      'network':     '⚠️ Network error. Check connection.',
-    };
-    document.getElementById('voice-status').innerHTML =
-      msgs[event.error] || ('❌ Error: ' + event.error);
-    document.getElementById('voice-status').style.color = '#f59e0b';
-    stopListening();
-  };
+    recognition_{uid}.onend = function() {{
+      va_{uid}_resetUI();
+      // Auto-restart if in continuous mode
+      if (isContinuous_{uid}) {{
+        restartTimer_{uid} = setTimeout(function() {{
+          if (!listening_{uid}) va_{uid}_start();
+        }}, 800);
+      }}
+    }};
 
-  recognition.onend = function() {
-    stopListening();
-  };
+    recognition_{uid}.start();
+  }}
 
-  recognition.start();
-}
+  function va_{uid}_stop() {{
+    isContinuous_{uid} = false;
+    clearTimeout(restartTimer_{uid});
+    listening_{uid} = false;
+    if (recognition_{uid}) {{ try {{ recognition_{uid}.stop(); }} catch(ex) {{}} }}
+    va_{uid}_resetUI();
+  }}
 
-function stopListening() {
-  isListening = false;
-  if (recognition) { try { recognition.stop(); } catch(e) {} }
-  document.getElementById('mic-btn').innerHTML = '🎙️ Start Listening';
-  document.getElementById('mic-btn').style.background = 'rgba(14,165,233,0.15)';
-  document.getElementById('mic-btn').style.borderColor = 'rgba(14,165,233,0.4)';
-  document.getElementById('mic-btn').style.color = '#0ea5e9';
-  document.getElementById('mic-icon').innerHTML = '🎙️';
-  if (!document.getElementById('voice-transcript').innerHTML) {
-    document.getElementById('voice-status').innerHTML =
-      'Say: &quot;show me Sales, Region, Profit&quot; · &quot;give me a bar chart of Revenue&quot; · &quot;Sales Amount is revenue column&quot;';
-    document.getElementById('voice-status').style.color = '#64748b';
-  }
-}
+  function va_{uid}_resetUI() {{
+    listening_{uid} = false;
+    document.getElementById(uid+"_btn").innerHTML = "🎙️ Listen";
+    document.getElementById(uid+"_btn").style.background = "rgba(14,165,233,0.13)";
+    document.getElementById(uid+"_btn").style.borderColor = "rgba(14,165,233,0.38)";
+    document.getElementById(uid+"_btn").style.color = "#0ea5e9";
+    document.getElementById(uid+"_icon").innerHTML = "🎙️";
+    document.getElementById(uid+"_wave").style.display = "none";
+    document.getElementById(uid+"_examples").style.display = "block";
+  }}
 
-function sendToStreamlit(transcript) {
-  document.getElementById('voice-status').innerHTML =
-    '✅ Processing: <strong style="color:#e2e8f0">' + transcript + '</strong>';
-  document.getElementById('voice-status').style.color = '#10b981';
+  function va_{uid}_send(transcript) {{
+    document.getElementById(uid+"_status").innerHTML =
+      "⚡ Processing: <strong style='color:#e2e8f0'>" + transcript + "</strong>";
+    document.getElementById(uid+"_status").style.color = "#10b981";
 
-  // Send to Streamlit via the input element trick
-  var input = window.parent.document.querySelector('input[data-testid="stTextInput"][aria-label="voice_input_hidden"]');
-  if (!input) {
-    // Fallback: use postMessage
-    window.parent.postMessage({type: 'voice_transcript', transcript: transcript}, '*');
-    return;
-  }
-  var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  nativeInputValueSetter.call(input, transcript);
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-}
+    // Add to history display
+    history_{uid}.unshift(transcript);
+    if (history_{uid}.length > 5) history_{uid}.pop();
+    var histEl = document.getElementById(uid+"_history");
+    histEl.style.display = "block";
+    histEl.innerHTML = "<strong style='color:#475569'>Recent:</strong> " +
+      history_{uid}.map(function(h,i) {{
+        return "<span style='color:" + (i===0?"#94a3b8":"#475569") + ";'>" + h + "</span>";
+      }}).join(" · ");
 
-// TTS — speak a message aloud
-function speak(text) {
-  if (!('speechSynthesis' in window)) return;
-  window.speechSynthesis.cancel();
-  var utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = 'en-IN';
-  utterance.rate = 0.95;
-  utterance.pitch = 1.0;
-  window.speechSynthesis.speak(utterance);
-}
+    // After first successful command, enable continuous mode
+    isContinuous_{uid} = true;
 
-// Auto-speak pending TTS message
-var ttsMsg = document.getElementById('tts-pending');
-if (ttsMsg && ttsMsg.dataset.text) {
-  setTimeout(function() { speak(ttsMsg.dataset.text); }, 500);
-}
-</script>
-<div id="tts-pending" data-text="" style="display:none;"></div>
-"""
+    // Inject into Streamlit hidden input
+    var inputs = window.parent.document.querySelectorAll("input");
+    var target = null;
+    for (var i = 0; i < inputs.length; i++) {{
+      if (inputs[i].getAttribute("aria-label") === "voice_input_{uid}") {{
+        target = inputs[i]; break;
+      }}
+    }}
+    if (target) {{
+      var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,"value").set;
+      setter.call(target, transcript);
+      target.dispatchEvent(new Event("input", {{bubbles:true}}));
+    }} else {{
+      // Fallback: sessionStorage bridge
+      window.parent.sessionStorage.setItem("voice_pending_{uid}", transcript);
+      window.parent.sessionStorage.setItem("voice_ts_{uid}", Date.now().toString());
+    }}
+  }}
 
-TTS_JS = """
-<script>
-(function() {
-  var text = "{tts_text}";
-  if (!text || !('speechSynthesis' in window)) return;
-  setTimeout(function() {{
+  // TTS helper
+  window["va_speak_{uid}"] = function(text) {{
+    if (!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
-    var u = new SpeechSynthesisUtterance(text);
-    u.lang = 'en-IN'; u.rate = 0.92; u.pitch = 1.0;
+    var u   = new SpeechSynthesisUtterance(text);
+    u.lang  = "en-IN";
+    u.rate  = 0.92;
+    u.pitch = 1.05;
+    // Prefer Indian English voice if available
+    var voices = window.speechSynthesis.getVoices();
+    var ind = voices.find(function(v) {{ return v.lang === "en-IN"; }});
+    if (ind) u.voice = ind;
     window.speechSynthesis.speak(u);
-  }}, 400);
-})();
+  }};
+
+}})();
 </script>
 """
 
-def render_voice_assistant(df, key_suffix="main"):
+
+def _build_tts_js(text):
+    import html as _html
+    safe = _html.escape(str(text)).replace("'","&#39;").replace('"','&quot;')
+    return f"""<script>
+(function(){{
+  if(!window.speechSynthesis) return;
+  setTimeout(function(){{
+    window.speechSynthesis.cancel();
+    var u=new SpeechSynthesisUtterance("{safe}");
+    u.lang="en-IN"; u.rate=0.92; u.pitch=1.05;
+    var voices=window.speechSynthesis.getVoices();
+    var ind=voices.find(function(v){{return v.lang==="en-IN";}});
+    if(ind) u.voice=ind;
+    window.speechSynthesis.speak(u);
+  }},350);
+}})();
+</script>"""
+
+
+def speak_tts(text):
+    """Trigger browser TTS."""
+    st.components.v1.html(_build_tts_js(text), height=0, scrolling=False)
+
+
+def _process_voice_result(transcript, df, found, key_suffix):
     """
-    Renders the voice assistant UI and processes any transcript.
-    Returns dict: {action, columns, chart_type, col_name, mapping, message, tts}
+    Core intent dispatcher. Returns result dict.
+    Multi-turn aware — uses VoiceConversation context.
     """
-    # Hidden text input that JS writes the transcript into
+    ctx = VoiceConversation.get()
+
+    # Resolve pronouns / additive references
+    resolved = VoiceConversation.resolve_pronoun(transcript, df.columns.tolist())
+    t = resolved.lower()
+
+    result = {
+        "action": None, "columns": [], "chart_type": None,
+        "col_name": None, "mapping": {}, "message": "", "tts": "",
+        "suitable": True, "confidence": [],
+    }
+
+    # ── File size query ───────────────────────────────────────────────
+    if any(k in t for k in ["size","large","limit","mb","megabyte","upload","file","how big","how much"]):
+        max_mb = get_plan_file_limit_mb() if AUTH_ENABLED else 200
+        plan   = "Starter" if max_mb == 50 else "Business"
+        msg = (f"Your current {plan} plan supports files up to {max_mb} megabytes. "
+               f"Starter plan: 50 MB for ₹2,000 per month. "
+               f"Business plan: 200 MB for ₹8,000 per month for up to 5 users. "
+               f"Enterprise plan: 200 MB plus white label for ₹25,000 per month.")
+        result.update({"action":"size_info","message":f"📦 {msg}","tts":msg})
+        VoiceConversation.update(last_action="size_info")
+        return result
+
+    # ── Chart request ─────────────────────────────────────────────────
+    chart_kws = list(CHART_ALIASES.keys()) + list(CHART_RULES.keys())
+    detected_chart = None
+    for kw in sorted(chart_kws, key=len, reverse=True):  # longest match first
+        if kw in t:
+            detected_chart = CHART_ALIASES.get(kw, kw)
+            break
+
+    if detected_chart:
+        col_matches = fuzzy_match_columns(resolved, df.columns.tolist())
+        # Filter out very low confidence
+        col_matches = [(c,s) for c,s in col_matches if s >= 0.5]
+        col_name    = col_matches[0][0] if col_matches else ctx.get("last_col_name")
+
+        if col_name:
+            suitable, msg, recommended = check_chart_suitability(detected_chart, col_name, df)
+            tts = msg.replace("**","").replace("❌","").replace("✅","").replace("⚠️","")
+            if not suitable:
+                tts += f" I recommend a {recommended} chart instead."
+            result.update({
+                "action":"chart","chart_type": recommended if not suitable else detected_chart,
+                "col_name":col_name,"message":msg,"tts":tts,
+                "suitable":suitable,"confidence":col_matches[:3],
+            })
+            VoiceConversation.update(last_chart=detected_chart,last_col_name=col_name,last_action="chart")
+        else:
+            msg = f"I heard you want a {detected_chart} chart but couldn't identify the column. Please name the column clearly."
+            result.update({"action":"chart","chart_type":detected_chart,"message":msg,"tts":msg})
+        VoiceConversation.add_history(transcript, result["message"])
+        return result
+
+    # ── Column mapping ────────────────────────────────────────────────
+    map_triggers = [" is ", " should be ", " map to ", " as my ", " maps to ", " set as "]
+    if any(mt in t for mt in map_triggers):
+        mappings = parse_voice_column_mapping(resolved, df.columns.tolist())
+        if mappings:
+            msg = "✅ Mapped: " + ", ".join(f"`{v}` → `{k}`" for k,v in mappings.items())
+            tts = "Done. I have mapped " + ", ".join(f"{v} as {k.replace('_',' ')}" for k,v in mappings.items())
+            result.update({"action":"column_map","mapping":mappings,"message":msg,"tts":tts})
+        else:
+            msg = f"⚠️ Couldn't match any columns from: '{transcript}'. Try: 'Sales Amount should be revenue column'"
+            result.update({"action":"column_map","message":msg,"tts":msg})
+        VoiceConversation.update(last_action="column_map")
+        VoiceConversation.add_history(transcript, result["message"])
+        return result
+
+    # ── Column selection ──────────────────────────────────────────────
+    col_matches = fuzzy_match_columns(resolved, df.columns.tolist())
+    col_matches = [(c,s) for c,s in col_matches if s >= 0.55]
+
+    if col_matches:
+        cols = [c for c,_ in col_matches]
+        conf = [f"{c} ({s:.0%})" for c,s in col_matches]
+
+        # Check if additive ("add X too") vs replacement
+        is_additive = any(a in t for a in ["add","also","too","as well","and also","plus","include"])
+        if is_additive and ctx.get("last_columns"):
+            existing = list(ctx["last_columns"])
+            new_cols = [c for c in cols if c not in existing]
+            cols     = existing + new_cols
+            msg      = f"✅ Added {', '.join(new_cols)} — now showing: {', '.join(cols)}"
+            tts      = f"Added {', '.join(new_cols)}. Now showing {len(cols)} columns."
+        else:
+            msg = f"✅ Selected {len(cols)} column(s): {', '.join(cols)}"
+            tts = f"Got it. Focusing on {len(cols)} columns: {', '.join(cols)}."
+
+        result.update({
+            "action":"column_select","columns":cols,
+            "message":msg,"tts":tts,"confidence":conf,
+        })
+        VoiceConversation.update(last_columns=cols, last_action="column_select")
+    else:
+        msg = f"⚠️ Couldn't match any column names from: '{transcript}'. Try saying the exact column name."
+        result.update({"action":"none","message":msg,"tts":msg})
+
+    VoiceConversation.add_history(transcript, result["message"])
+    return result
+
+
+def render_voice_assistant(df, key_suffix="main", engine_label=None, compact=False):
+    """
+    Full voice assistant widget.
+    compact=True → small inline mic button for per-engine use.
+    Returns result dict.
+    """
+    uid    = key_suffix.replace(" ","_").replace("-","_")
+    result = {"action":None,"columns":[],"chart_type":None,
+              "col_name":None,"mapping":{},"message":"","tts":"","suitable":True}
+
+    # Hidden input that JS writes transcript into
     transcript = st.text_input(
-        "voice_input_hidden",
-        key=f"voice_input_{key_suffix}",
+        f"voice_input_{uid}",
+        key=f"vi_{uid}",
         label_visibility="hidden",
-        placeholder=""
+        placeholder="",
     )
 
-    # Render the mic UI
-    st.components.v1.html(VOICE_JS, height=130, scrolling=False)
-
-    result = {"action": None, "columns": [], "chart_type": None,
-              "col_name": None, "mapping": {}, "message": "", "tts": ""}
+    if compact:
+        # Minimal button for per-engine use
+        st.components.v1.html(
+            _build_voice_js(uid, height=120,
+                placeholder_cmds=[
+                    f'"Explain this {engine_label or ""} result"',
+                    '"Show me only top 5 by revenue"',
+                    '"Filter by region north"',
+                ]),
+            height=125, scrolling=False
+        )
+    else:
+        st.components.v1.html(
+            _build_voice_js(uid),
+            height=165, scrolling=False
+        )
 
     if not transcript or not transcript.strip():
         return result
 
-    t = transcript.strip().lower()
+    result = _process_voice_result(transcript.strip(), df, {}, uid)
 
-    # ── Detect intent ─────────────────────────────────────────────────
-    COLUMN_TRIGGERS  = ["show me","only","select","use","columns","focus on","keep","i want"]
-    CHART_TRIGGERS   = ["chart","graph","plot","visuali","show","give me","create","draw","make"]
-    MAP_TRIGGERS     = ["is","should be","map to","as my","set as"]
-    SIZE_TRIGGERS    = ["size","large","limit","mb","megabyte","too big","exceed","over"]
-
-    is_column_select = any(t_k in t for t_k in COLUMN_TRIGGERS)
-    is_chart_request = any(t_k in t for t_k in CHART_TRIGGERS)
-    is_mapping_req   = any(t_k in t for t_k in MAP_TRIGGERS)
-    is_size_query    = any(t_k in t for t_k in SIZE_TRIGGERS)
-
-    # ── File size query ───────────────────────────────────────────────
-    if is_size_query:
-        max_mb = get_plan_file_limit_mb() if AUTH_ENABLED else 200
-        plan   = "Starter" if max_mb == 50 else "Business"
-        msg    = (f"Your current {plan} plan supports files up to {max_mb} megabytes. "
-                  f"Starter plan supports 50 megabytes for ₹2,000 per month. "
-                  f"Business plan supports 200 megabytes for ₹8,000 per month. "
-                  f"Enterprise plan supports unlimited file size for ₹25,000 per month.")
-        result.update({"action":"size_info","message":msg,"tts":msg})
-        return result
-
-    # ── Column mapping request ────────────────────────────────────────
-    if is_mapping_req and not is_chart_request:
-        from master_pipeline import KEY_CATALOGUE  # will resolve at runtime via session
-        kc_keys = list(st.session_state.get("_key_catalogue_keys", {}).keys())
-        mappings = parse_voice_column_mapping(transcript, df.columns.tolist(), {k:{} for k in kc_keys})
-        if mappings:
-            msg = "Mapped: " + ", ".join(f"{v} → {k}" for k,v in mappings.items())
-            tts = "Done. I have mapped " + ", ".join(f"{v} as {k.replace('_',' ')}" for k,v in mappings.items())
-            result.update({"action":"column_map","mapping":mappings,"message":msg,"tts":tts})
+    # Show feedback
+    if result["message"]:
+        if result["message"].startswith("✅"):
+            st.success(result["message"])
+        elif result["message"].startswith("❌"):
+            st.warning(result["message"])
+        elif result["message"].startswith("⚠️"):
+            st.warning(result["message"])
         else:
-            msg = f"I heard '{transcript}' but could not match any columns. Try saying: 'Sales Amount is revenue column'"
-            result.update({"action":"column_map","message":msg,"tts":msg})
-        return result
+            st.info(result["message"])
 
-    # ── Chart request ─────────────────────────────────────────────────
-    chart_keywords = {
-        "pie":"pie","bar":"bar","line":"line","area":"area","scatter":"scatter",
-        "heatmap":"heatmap","heat map":"heatmap","histogram":"histogram",
-        "treemap":"treemap","tree map":"treemap","3d":"3d","decision tree":"decision_tree",
-        "column chart":"bar","trend":"line","bubble":"scatter","dot":"scatter",
-    }
-    detected_chart = None
-    for kw, ct in chart_keywords.items():
-        if kw in t:
-            detected_chart = ct
-            break
-
-    if is_chart_request and detected_chart:
-        cols_mentioned = fuzzy_match_columns(transcript, df.columns.tolist())
-        col_name = cols_mentioned[0] if cols_mentioned else None
-
-        if col_name:
-            suitable, msg, recommended = check_chart_suitability(detected_chart, col_name, df)
-            tts_msg = msg.replace("**","").replace("❌","").replace("✅","").replace("⚠️","")
-            if not suitable:
-                tts_msg += f" I recommend a {recommended} chart instead."
-            result.update({
-                "action": "chart",
-                "chart_type": recommended if not suitable else detected_chart,
-                "col_name": col_name,
-                "message": msg,
-                "tts": tts_msg,
-                "suitable": suitable,
-            })
+    # Confidence info
+    if result.get("confidence") and len(result["confidence"]) > 1:
+        alts = result["confidence"][1:3]
+        if isinstance(alts[0], tuple):
+            alt_str = " · ".join(f"{c} ({s:.0%})" for c,s in alts)
         else:
-            msg = f"I heard you want a {detected_chart} chart but couldn't identify the column. Please say the column name clearly."
-            result.update({"action":"chart","chart_type":detected_chart,"message":msg,"tts":msg})
-        return result
+            alt_str = " · ".join(alts)
+        st.caption(f"💡 Also matched: {alt_str} — say 'undo' to revert")
 
-    # ── Column selection ──────────────────────────────────────────────
-    if is_column_select or (not is_chart_request and not is_mapping_req):
-        cols = fuzzy_match_columns(transcript, df.columns.tolist())
-        if cols:
-            msg = f"✅ Found {len(cols)} column(s): {', '.join(cols)}"
-            tts = f"Found {len(cols)} columns: {', '.join(cols)}. Applying to column mapping."
-            result.update({"action":"column_select","columns":cols,"message":msg,"tts":tts})
-        else:
-            msg = f"I heard '{transcript}' but couldn't match any column names from your dataset."
-            result.update({"action":"column_select","message":msg,"tts":msg})
-        return result
+    # Speak TTS
+    if result.get("tts"):
+        speak_tts(result["tts"])
 
     return result
 
 
-def speak_tts(text):
-    """Trigger browser text-to-speech for a given message."""
-    import html as _html
-    safe_text = _html.escape(text).replace("'","&#39;")
-    js = TTS_JS.replace("{tts_text}", safe_text)
-    st.components.v1.html(js, height=0, scrolling=False)
 
 # ─── Auth Import ──────────────────────────────────────────────────────────────
 try:
@@ -2496,7 +2707,19 @@ def render_one_click_story(df, found, domain):
       7. Monday Morning Actions
       8. Footer with branding
     """
+
+    # ── 🎙️ Voice Assistant (compact) ──────────────────────────────────────────
+    with st.expander("🎙️ Voice Assistant for 1 Click Story", expanded=False):
+        _vr_story = render_voice_assistant(df, key_suffix="story",
+                                           engine_label="1 Click Story", compact=True)
+        if _vr_story["action"] == "column_select" and _vr_story["columns"]:
+            st.session_state["voice_selected_cols"] = _vr_story["columns"]
+        if _vr_story["action"] == "column_map" and _vr_story["mapping"]:
+            for _k, _v in _vr_story["mapping"].items():
+                if _v in df.columns: found[_k] = _v
+    # ── End voice ─────────────────────────────────────────────────────────────
     import datetime
+
 
     ac   = DOMAIN_COLOR.get(domain, C["blue"])
     cur  = detect_currency(df)
@@ -3934,6 +4157,19 @@ def compute_nlq_answer(question, df, found, domain):
 
 def render_nlq(df, domain, found):
     section("💬 Ask Your Data — Natural Language Query", domain.lower())
+    # ── 🎙️ Voice Assistant (compact) ──────────────────────────────────────────
+    with st.expander("🎙️ Voice Assistant for Natural Language Query", expanded=False):
+        _vr_nlq = render_voice_assistant(df, key_suffix="nlq",
+                                            engine_label="Natural Language Query", compact=True)
+        if _vr_nlq["action"] == "column_select" and _vr_nlq["columns"]:
+            st.session_state["voice_selected_cols"] = _vr_nlq["columns"]
+            st.info(f"🎙️ Focusing on: {{', '.join(_vr_nlq['columns'])}}")
+        if _vr_nlq["action"] == "column_map" and _vr_nlq["mapping"]:
+            for _k, _v in _vr_nlq["mapping"].items():
+                if _v in df.columns:
+                    found[_k] = _v
+    # ── End voice ─────────────────────────────────────────────────────────────
+
     st.markdown("""<div class="insight-box">
     <strong>💬 Ask anything about your data in plain English.</strong><br>
     Examples: <em>"What is total revenue in Q3?"</em> &nbsp;·&nbsp;
@@ -5319,6 +5555,19 @@ def render_anomaly_banner(anomalies, domain):
 
 def render_eda(df, found, domain):
     section("🔍 Exploratory Data Analysis", domain.lower())
+    # ── 🎙️ Voice Assistant (compact) ──────────────────────────────────────────
+    with st.expander("🎙️ Voice Assistant for EDA Analysis", expanded=False):
+        _vr_eda = render_voice_assistant(df, key_suffix="eda",
+                                            engine_label="EDA Analysis", compact=True)
+        if _vr_eda["action"] == "column_select" and _vr_eda["columns"]:
+            st.session_state["voice_selected_cols"] = _vr_eda["columns"]
+            st.info(f"🎙️ Focusing on: {{', '.join(_vr_eda['columns'])}}")
+        if _vr_eda["action"] == "column_map" and _vr_eda["mapping"]:
+            for _k, _v in _vr_eda["mapping"].items():
+                if _v in df.columns:
+                    found[_k] = _v
+    # ── End voice ─────────────────────────────────────────────────────────────
+
 
     st.markdown("""<div class="insight-box">
     <strong>🔍 What is EDA?</strong> — It's a full health check of your data before any analysis.<br>
@@ -5651,6 +5900,19 @@ def render_eda(df, found, domain):
 
 def render_prediction(df, found, domain):
     section("🤖 Prediction Engine", domain.lower())
+    # ── 🎙️ Voice Assistant (compact) ──────────────────────────────────────────
+    with st.expander("🎙️ Voice Assistant for Prediction Engine", expanded=False):
+        _vr_prediction = render_voice_assistant(df, key_suffix="prediction",
+                                            engine_label="Prediction Engine", compact=True)
+        if _vr_prediction["action"] == "column_select" and _vr_prediction["columns"]:
+            st.session_state["voice_selected_cols"] = _vr_prediction["columns"]
+            st.info(f"🎙️ Focusing on: {{', '.join(_vr_prediction['columns'])}}")
+        if _vr_prediction["action"] == "column_map" and _vr_prediction["mapping"]:
+            for _k, _v in _vr_prediction["mapping"].items():
+                if _v in df.columns:
+                    found[_k] = _v
+    # ── End voice ─────────────────────────────────────────────────────────────
+
 
     st.markdown("""<div class="insight-box">
     <strong>🤖 What does this do?</strong><br>
@@ -6066,6 +6328,19 @@ The Prediction Engine needs numeric targets like sales, salary, or categorical t
 
 def render_prescriptive(df, found, domain):
     section("💊 Prescriptive Insights — What Should You Do?", domain.lower())
+    # ── 🎙️ Voice Assistant (compact) ──────────────────────────────────────────
+    with st.expander("🎙️ Voice Assistant for Prescriptive Insights", expanded=False):
+        _vr_prescriptive = render_voice_assistant(df, key_suffix="prescriptive",
+                                            engine_label="Prescriptive Insights", compact=True)
+        if _vr_prescriptive["action"] == "column_select" and _vr_prescriptive["columns"]:
+            st.session_state["voice_selected_cols"] = _vr_prescriptive["columns"]
+            st.info(f"🎙️ Focusing on: {{', '.join(_vr_prescriptive['columns'])}}")
+        if _vr_prescriptive["action"] == "column_map" and _vr_prescriptive["mapping"]:
+            for _k, _v in _vr_prescriptive["mapping"].items():
+                if _v in df.columns:
+                    found[_k] = _v
+    # ── End voice ─────────────────────────────────────────────────────────────
+
 
     st.markdown("""<div class="insight-box">
     <strong>💊 What is Prescriptive Analysis?</strong><br>
@@ -6512,6 +6787,17 @@ def render_advanced_dashboard(df, found, domain):
     import plotly.graph_objects as go
     import plotly.express as px
     from plotly.subplots import make_subplots
+
+    # ── 🎙️ Voice Assistant (compact) ──────────────────────────────────────────
+    with st.expander("🎙️ Voice Assistant for Advanced Dashboard", expanded=False):
+        _vr_dash = render_voice_assistant(df, key_suffix="dashboard",
+                                          engine_label="Advanced Dashboard", compact=True)
+        if _vr_dash["action"] == "column_select" and _vr_dash["columns"]:
+            st.session_state["voice_selected_cols"] = _vr_dash["columns"]
+        if _vr_dash["action"] == "column_map" and _vr_dash["mapping"]:
+            for _k, _v in _vr_dash["mapping"].items():
+                if _v in df.columns: found[_k] = _v
+    # ── End voice ─────────────────────────────────────────────────────────────
     import pandas as pd
     import numpy as np
     import streamlit as st
