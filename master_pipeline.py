@@ -2709,14 +2709,17 @@ def render_one_click_story(df, found, domain):
     """
 
     # ── 🎙️ Voice Assistant (compact) ──────────────────────────────────────────
-    with st.expander("🎙️ Voice Assistant for 1 Click Story", expanded=False):
-        _vr_story = render_voice_assistant(df, key_suffix="story",
-                                           engine_label="1 Click Story", compact=True)
-        if _vr_story["action"] == "column_select" and _vr_story["columns"]:
-            st.session_state["voice_selected_cols"] = _vr_story["columns"]
-        if _vr_story["action"] == "column_map" and _vr_story["mapping"]:
-            for _k, _v in _vr_story["mapping"].items():
-                if _v in df.columns: found[_k] = _v
+    try:
+        with st.expander("🎙️ Voice Assistant for 1 Click Story", expanded=False):
+            _vr_story = render_voice_assistant(df, key_suffix="story",
+                                               engine_label="1 Click Story", compact=True)
+            if _vr_story["action"] == "column_select" and _vr_story["columns"]:
+                st.session_state["voice_selected_cols"] = _vr_story["columns"]
+            if _vr_story["action"] == "column_map" and _vr_story["mapping"]:
+                for _k, _v in _vr_story["mapping"].items():
+                    if _v in df.columns: found[_k] = _v
+    except Exception:
+        pass
     # ── End voice ─────────────────────────────────────────────────────────────
     import datetime
 
@@ -4158,17 +4161,20 @@ def compute_nlq_answer(question, df, found, domain):
 def render_nlq(df, domain, found):
     section("💬 Ask Your Data — Natural Language Query", domain.lower())
     # ── 🎙️ Voice Assistant (compact) ──────────────────────────────────────────
-    with st.expander("🎙️ Voice Assistant for Natural Language Query", expanded=False):
-        _vr_nlq = render_voice_assistant(df, key_suffix="nlq",
-                                            engine_label="Natural Language Query", compact=True)
-        if _vr_nlq["action"] == "column_select" and _vr_nlq["columns"]:
-            st.session_state["voice_selected_cols"] = _vr_nlq["columns"]
-            st.info(f"🎙️ Focusing on: {{', '.join(_vr_nlq['columns'])}}")
-        if _vr_nlq["action"] == "column_map" and _vr_nlq["mapping"]:
-            for _k, _v in _vr_nlq["mapping"].items():
-                if _v in df.columns:
-                    found[_k] = _v
-    # ── End voice ─────────────────────────────────────────────────────────────
+    try:
+        with st.expander("🎙️ Voice Assistant for Natural Language Query", expanded=False):
+            _vr_nlq = render_voice_assistant(df, key_suffix="nlq",
+                                                engine_label="Natural Language Query", compact=True)
+            if _vr_nlq["action"] == "column_select" and _vr_nlq["columns"]:
+                st.session_state["voice_selected_cols"] = _vr_nlq["columns"]
+                st.info(f"🎙️ Focusing on: {{', '.join(_vr_nlq['columns'])}}")
+            if _vr_nlq["action"] == "column_map" and _vr_nlq["mapping"]:
+                for _k, _v in _vr_nlq["mapping"].items():
+                    if _v in df.columns:
+                        found[_k] = _v
+        # ── End voice ─────────────────────────────────────────────────────────────
+    except Exception:
+        pass
 
     st.markdown("""<div class="insight-box">
     <strong>💬 Ask anything about your data in plain English.</strong><br>
@@ -5556,17 +5562,20 @@ def render_anomaly_banner(anomalies, domain):
 def render_eda(df, found, domain):
     section("🔍 Exploratory Data Analysis", domain.lower())
     # ── 🎙️ Voice Assistant (compact) ──────────────────────────────────────────
-    with st.expander("🎙️ Voice Assistant for EDA Analysis", expanded=False):
-        _vr_eda = render_voice_assistant(df, key_suffix="eda",
-                                            engine_label="EDA Analysis", compact=True)
-        if _vr_eda["action"] == "column_select" and _vr_eda["columns"]:
-            st.session_state["voice_selected_cols"] = _vr_eda["columns"]
-            st.info(f"🎙️ Focusing on: {{', '.join(_vr_eda['columns'])}}")
-        if _vr_eda["action"] == "column_map" and _vr_eda["mapping"]:
-            for _k, _v in _vr_eda["mapping"].items():
-                if _v in df.columns:
-                    found[_k] = _v
-    # ── End voice ─────────────────────────────────────────────────────────────
+    try:
+        with st.expander("🎙️ Voice Assistant for EDA Analysis", expanded=False):
+            _vr_eda = render_voice_assistant(df, key_suffix="eda",
+                                                engine_label="EDA Analysis", compact=True)
+            if _vr_eda["action"] == "column_select" and _vr_eda["columns"]:
+                st.session_state["voice_selected_cols"] = _vr_eda["columns"]
+                st.info(f"🎙️ Focusing on: {{', '.join(_vr_eda['columns'])}}")
+            if _vr_eda["action"] == "column_map" and _vr_eda["mapping"]:
+                for _k, _v in _vr_eda["mapping"].items():
+                    if _v in df.columns:
+                        found[_k] = _v
+        # ── End voice ─────────────────────────────────────────────────────────────
+    except Exception:
+        pass
 
 
     st.markdown("""<div class="insight-box">
@@ -5901,17 +5910,20 @@ def render_eda(df, found, domain):
 def render_prediction(df, found, domain):
     section("🤖 Prediction Engine", domain.lower())
     # ── 🎙️ Voice Assistant (compact) ──────────────────────────────────────────
-    with st.expander("🎙️ Voice Assistant for Prediction Engine", expanded=False):
-        _vr_prediction = render_voice_assistant(df, key_suffix="prediction",
-                                            engine_label="Prediction Engine", compact=True)
-        if _vr_prediction["action"] == "column_select" and _vr_prediction["columns"]:
-            st.session_state["voice_selected_cols"] = _vr_prediction["columns"]
-            st.info(f"🎙️ Focusing on: {{', '.join(_vr_prediction['columns'])}}")
-        if _vr_prediction["action"] == "column_map" and _vr_prediction["mapping"]:
-            for _k, _v in _vr_prediction["mapping"].items():
-                if _v in df.columns:
-                    found[_k] = _v
-    # ── End voice ─────────────────────────────────────────────────────────────
+    try:
+        with st.expander("🎙️ Voice Assistant for Prediction Engine", expanded=False):
+            _vr_prediction = render_voice_assistant(df, key_suffix="prediction",
+                                                engine_label="Prediction Engine", compact=True)
+            if _vr_prediction["action"] == "column_select" and _vr_prediction["columns"]:
+                st.session_state["voice_selected_cols"] = _vr_prediction["columns"]
+                st.info(f"🎙️ Focusing on: {{', '.join(_vr_prediction['columns'])}}")
+            if _vr_prediction["action"] == "column_map" and _vr_prediction["mapping"]:
+                for _k, _v in _vr_prediction["mapping"].items():
+                    if _v in df.columns:
+                        found[_k] = _v
+        # ── End voice ─────────────────────────────────────────────────────────────
+    except Exception:
+        pass
 
 
     st.markdown("""<div class="insight-box">
@@ -6329,17 +6341,20 @@ The Prediction Engine needs numeric targets like sales, salary, or categorical t
 def render_prescriptive(df, found, domain):
     section("💊 Prescriptive Insights — What Should You Do?", domain.lower())
     # ── 🎙️ Voice Assistant (compact) ──────────────────────────────────────────
-    with st.expander("🎙️ Voice Assistant for Prescriptive Insights", expanded=False):
-        _vr_prescriptive = render_voice_assistant(df, key_suffix="prescriptive",
-                                            engine_label="Prescriptive Insights", compact=True)
-        if _vr_prescriptive["action"] == "column_select" and _vr_prescriptive["columns"]:
-            st.session_state["voice_selected_cols"] = _vr_prescriptive["columns"]
-            st.info(f"🎙️ Focusing on: {{', '.join(_vr_prescriptive['columns'])}}")
-        if _vr_prescriptive["action"] == "column_map" and _vr_prescriptive["mapping"]:
-            for _k, _v in _vr_prescriptive["mapping"].items():
-                if _v in df.columns:
-                    found[_k] = _v
-    # ── End voice ─────────────────────────────────────────────────────────────
+    try:
+        with st.expander("🎙️ Voice Assistant for Prescriptive Insights", expanded=False):
+            _vr_prescriptive = render_voice_assistant(df, key_suffix="prescriptive",
+                                                engine_label="Prescriptive Insights", compact=True)
+            if _vr_prescriptive["action"] == "column_select" and _vr_prescriptive["columns"]:
+                st.session_state["voice_selected_cols"] = _vr_prescriptive["columns"]
+                st.info(f"🎙️ Focusing on: {{', '.join(_vr_prescriptive['columns'])}}")
+            if _vr_prescriptive["action"] == "column_map" and _vr_prescriptive["mapping"]:
+                for _k, _v in _vr_prescriptive["mapping"].items():
+                    if _v in df.columns:
+                        found[_k] = _v
+        # ── End voice ─────────────────────────────────────────────────────────────
+    except Exception:
+        pass
 
 
     st.markdown("""<div class="insight-box">
@@ -6789,18 +6804,19 @@ def render_advanced_dashboard(df, found, domain):
     from plotly.subplots import make_subplots
 
     # ── 🎙️ Voice Assistant (compact) ──────────────────────────────────────────
-    with st.expander("🎙️ Voice Assistant for Advanced Dashboard", expanded=False):
-        _vr_dash = render_voice_assistant(df, key_suffix="dashboard",
-                                          engine_label="Advanced Dashboard", compact=True)
-        if _vr_dash["action"] == "column_select" and _vr_dash["columns"]:
-            st.session_state["voice_selected_cols"] = _vr_dash["columns"]
-        if _vr_dash["action"] == "column_map" and _vr_dash["mapping"]:
-            for _k, _v in _vr_dash["mapping"].items():
-                if _v in df.columns: found[_k] = _v
+    try:
+        import streamlit as _st_dash
+        with _st_dash.expander("🎙️ Voice Assistant for Advanced Dashboard", expanded=False):
+            _vr_dash = render_voice_assistant(df, key_suffix="dashboard",
+                                              engine_label="Advanced Dashboard", compact=True)
+            if _vr_dash["action"] == "column_select" and _vr_dash["columns"]:
+                _st_dash.session_state["voice_selected_cols"] = _vr_dash["columns"]
+            if _vr_dash["action"] == "column_map" and _vr_dash["mapping"]:
+                for _k, _v in _vr_dash["mapping"].items():
+                    if _v in df.columns: found[_k] = _v
+    except Exception:
+        pass
     # ── End voice ─────────────────────────────────────────────────────────────
-    import pandas as pd
-    import numpy as np
-    import streamlit as st
 
     _cur  = detect_currency(df)
     ac    = DOMAIN_COLOR.get(domain, C["blue"])
