@@ -397,18 +397,109 @@ def get_user_plan():
     # Default to starter for now — extend with Supabase DB lookup
     return st.session_state.get("user_plan", "starter")
 
+# ─── Plan Feature Matrix ────────────────────────────────────────────────────
+PLAN_LIMITS = {
+    #  feature              starter   business  enterprise
+    "ml":                  [False,    True,     True  ],  # ML Prediction Engine
+    "prescription":        [False,    True,     True  ],  # Prescriptive Insights
+    "pdf":                 [False,    True,     True  ],  # PDF Export
+    "voice":               [False,    True,     True  ],  # Voice Assistant
+    "google_sheets":       [False,    True,     True  ],  # Google Sheets Connector
+    "database":            [False,    True,     True  ],  # Database Connector
+    "white_label":         [False,    False,    True  ],  # White-label branding
+    "priority_support":    [False,    False,    True  ],  # Priority support + SLA
+    "custom_onboarding":   [False,    False,    True  ],  # Custom onboarding
+    "domains":             [3,        7,        7     ],  # No. of domain types
+    "max_mb":              [50,       200,      200   ],  # Max file size MB
+    "max_users":           [1,        5,        25    ],  # Max users per account
+}
+PLAN_INDEX = {"starter": 0, "business": 1, "enterprise": 2}
+
+PLAN_NAMES  = ["Starter",   "Business",   "Enterprise"]
+PLAN_PRICES = ["₹2,000/mo", "₹8,000/mo",  "₹25,000/mo"]
+
 def check_plan_limit(feature):
-    """Check if user's plan allows a feature"""
-    plan = get_user_plan()
-    limits = {
-        "starter":    {"ml": False, "prescription": False, "pdf": True,  "domains": 3, "max_mb": 50,  "max_users": 1},
-        "business":   {"ml": True,  "prescription": True,  "pdf": True,  "domains": 7, "max_mb": 200, "max_users": 5},
-        "enterprise": {"ml": True,  "prescription": True,  "pdf": True,  "domains": 7, "max_mb": 200, "max_users": 25},
-    }
-    return limits.get(plan, limits["starter"]).get(feature, False)
+    """Return the feature value for the current user plan."""
+    plan  = get_user_plan()
+    idx   = PLAN_INDEX.get(plan, 0)
+    row   = PLAN_LIMITS.get(feature)
+    if row is None:
+        return False
+    return row[idx]
 
 def get_plan_file_limit_mb():
-    """Return the max file size in MB for the current user's plan"""
+    """Return the max file size in MB for the current user's plan."""
+    return check_plan_limit("max_mb") or 50
+
+def get_plan_name():
+    """Return the display name of the current plan."""
     plan = get_user_plan()
-    limits = {"starter": 50, "business": 200, "enterprise": 200}
-    return limits.get(plan, 50)
+    return PLAN_NAMES[PLAN_INDEX.get(plan, 0)]
+
+def get_upgrade_plan():
+    """Return the next plan up from the current one."""
+    plan = get_user_plan()
+    idx  = PLAN_INDEX.get(plan, 0)
+    if idx < 2:
+        return PLAN_NAMES[idx + 1], PLAN_PRICES[idx + 1]
+    return None, None
+
+def render_upgrade_prompt(feature_name, compact=False):
+    """
+    Show a professional upgrade prompt when user tries to access a locked feature.
+    Call this wherever a gated feature is blocked.
+    """
+    plan      = get_plan_name()
+    next_plan, next_price = get_upgrade_plan()
+    if not next_plan:
+        return  # already on enterprise
+
+    FEATURE_LABELS = {
+        "ml":            "ML Prediction Engine",
+        "prescription":  "Prescriptive AI Insights",
+        "pdf":           "PDF Export",
+        "voice":         "Voice Assistant",
+        "google_sheets": "Google Sheets Connector",
+        "database":      "Database Connector",
+        "white_label":   "White-Label Branding",
+    }
+    label = FEATURE_LABELS.get(feature_name, feature_name.replace("_"," ").title())
+
+    if compact:
+        st.warning(
+            f"🔒 **{label}** is available on the **{next_plan} plan** ({next_price}). "
+            f"You are on **{plan}**. "
+            f"[Upgrade →](mailto:pankaj@1clickdataanalysis.com?subject=Upgrade to {next_plan})"
+        )
+        return
+
+    st.markdown(f"""
+<div style="background:linear-gradient(135deg,rgba(249,115,22,0.08),rgba(239,68,68,0.05));
+border:1px solid rgba(249,115,22,0.3);border-radius:14px;padding:24px 28px;margin:8px 0;">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+    <span style="font-size:1.6rem;">🔒</span>
+    <div>
+      <div style="font-weight:800;color:#fbbf24;font-size:1rem;">{label} — {next_plan} Plan Required</div>
+      <div style="color:#64748b;font-size:.82rem;">You are currently on the <strong style="color:#e2e8f0;">{plan}</strong> plan</div>
+    </div>
+  </div>
+  <div style="color:#94a3b8;font-size:.875rem;margin-bottom:16px;line-height:1.6;">
+    This feature is available on the <strong style="color:#fbbf24;">{next_plan} plan ({next_price})</strong>.
+    Upgrade to unlock {label}, along with all other {next_plan} features.
+  </div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;">
+    <a href="mailto:pankaj@1clickdataanalysis.com?subject=Upgrade Request — {next_plan} Plan"
+       style="background:linear-gradient(135deg,#f97316,#ef4444);color:#fff;
+              padding:10px 22px;border-radius:9px;text-decoration:none;
+              font-weight:700;font-size:.85rem;">
+      Upgrade to {next_plan} →
+    </a>
+    <a href="https://1clickdataanalysis.com/#pricing"
+       style="background:rgba(255,255,255,0.06);color:#94a3b8;border:1px solid rgba(255,255,255,0.1);
+              padding:10px 22px;border-radius:9px;text-decoration:none;
+              font-weight:600;font-size:.85rem;">
+      View All Plans
+    </a>
+  </div>
+</div>
+""", unsafe_allow_html=True)
