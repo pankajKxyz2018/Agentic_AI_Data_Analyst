@@ -857,8 +857,11 @@ except ImportError:
     def is_logged_in(): return True
     def is_admin(): return False
     def get_tenant_id(): return "default"
-    def check_plan_limit(f): return True
+    def check_plan_limit(f): return True   # all features open when auth disabled
     def get_plan_file_limit_mb(): return 200
+    def get_plan_name(): return "Enterprise"
+    def get_upgrade_plan(): return None, None
+    def render_upgrade_prompt(feature, compact=False): pass
     def render_login_page(): pass
     def render_user_header(): pass
     def render_admin_panel(): pass
@@ -4457,6 +4460,12 @@ def generate_pdf_report(df, found, domain):
 
 
 def render_pdf_export(df, found, domain):
+    # ── Plan gate ──────────────────────────────────────────────────────────
+    if AUTH_ENABLED and not check_plan_limit("pdf"):
+        section("📄 PDF Export", domain.lower())
+        render_upgrade_prompt("pdf")
+        return
+    # ───────────────────────────────────────────────────────────────────────
     section("📄 Export Boardroom PDF Report", domain.lower())
     c1, c2 = st.columns([2, 1])
     with c1:
@@ -5909,6 +5918,11 @@ def render_eda(df, found, domain):
 
 def render_prediction(df, found, domain):
     section("🤖 Prediction Engine", domain.lower())
+    # ── Plan gate ──────────────────────────────────────────────────────────
+    if AUTH_ENABLED and not check_plan_limit("ml"):
+        render_upgrade_prompt("ml")
+        return
+    # ───────────────────────────────────────────────────────────────────────
     # ── 🎙️ Voice Assistant (compact) ──────────────────────────────────────────
     try:
         with st.expander("🎙️ Voice Assistant for Prediction Engine", expanded=False):
@@ -6340,6 +6354,11 @@ The Prediction Engine needs numeric targets like sales, salary, or categorical t
 
 def render_prescriptive(df, found, domain):
     section("💊 Prescriptive Insights — What Should You Do?", domain.lower())
+    # ── Plan gate ──────────────────────────────────────────────────────────
+    if AUTH_ENABLED and not check_plan_limit("prescription"):
+        render_upgrade_prompt("prescription")
+        return
+    # ───────────────────────────────────────────────────────────────────────
     # ── 🎙️ Voice Assistant (compact) ──────────────────────────────────────────
     try:
         with st.expander("🎙️ Voice Assistant for Prescriptive Insights", expanded=False):
@@ -7285,7 +7304,11 @@ def main():
                 st.stop()
 
     with tab_sheets:
-        sheets_df, sheets_fname = render_google_sheets_tab()
+        if AUTH_ENABLED and not check_plan_limit("google_sheets"):
+            render_upgrade_prompt("google_sheets", compact=True)
+            sheets_df, sheets_fname = None, None
+        else:
+            sheets_df, sheets_fname = render_google_sheets_tab()
 
     has_data = (f is not None) or (sheets_df is not None)
     if not has_data:
@@ -7328,8 +7351,18 @@ def main():
     render_anomaly_banner(anomalies, domain)
 
     # ── Voice Assistant ───────────────────────────────────────────────────
-    with st.expander("🎙️ Voice Assistant — Column Selection, Chart Requests & Column Mapping", expanded=False):
-        st.markdown("""
+    # ── Voice plan gate ────────────────────────────────────────────────────
+    _voice_allowed = (not AUTH_ENABLED) or check_plan_limit("voice")
+    _voice_label   = "🎙️ Voice Assistant — Column Selection, Chart Requests & Column Mapping"
+    if AUTH_ENABLED and not _voice_allowed:
+        _voice_label += " 🔒 Business Plan Required"
+    with st.expander(_voice_label, expanded=False):
+        if AUTH_ENABLED and not _voice_allowed:
+            render_upgrade_prompt("voice", compact=True)
+        else:
+            pass
+        if not (AUTH_ENABLED and not _voice_allowed):
+          st.markdown("""
 <div style='background:rgba(139,92,246,0.06);border:1px solid rgba(139,92,246,0.2);
 border-radius:10px;padding:12px 16px;margin-bottom:10px;font-size:.82rem;color:#94a3b8;'>
 <strong style='color:#a78bfa;'>💡 What you can say:</strong><br>
