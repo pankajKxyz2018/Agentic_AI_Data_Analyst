@@ -850,8 +850,12 @@ def render_voice_assistant(df, key_suffix="main", engine_label=None, compact=Fal
 # ─── Auth Import ──────────────────────────────────────────────────────────────
 try:
     from auth import (render_login_page, render_user_header, render_admin_panel,
-                      is_logged_in, is_admin, get_tenant_id, check_plan_limit, get_plan_file_limit_mb)
+                      is_logged_in, is_admin, get_tenant_id, check_plan_limit,
+                      get_plan_file_limit_mb, get_plan_name, get_upgrade_plan,
+                      render_upgrade_prompt)
     AUTH_ENABLED = True
+    # Verify render_upgrade_prompt loaded correctly
+    _ = render_upgrade_prompt  # will raise NameError if not imported
 except ImportError:
     AUTH_ENABLED = False
     def is_logged_in(): return True
@@ -861,10 +865,64 @@ except ImportError:
     def get_plan_file_limit_mb(): return 200
     def get_plan_name(): return "Enterprise"
     def get_upgrade_plan(): return None, None
-    def render_upgrade_prompt(feature, compact=False): pass
+    def render_upgrade_prompt(feature, compact=False):
+        _render_upgrade_prompt_standalone(feature, compact)
     def render_login_page(): pass
     def render_user_header(): pass
     def render_admin_panel(): pass
+
+# ── Standalone upgrade prompt (works even if auth.py not available) ───────────
+def _render_upgrade_prompt_standalone(feature_name, compact=False):
+    """Fallback upgrade prompt defined directly in master_pipeline.py"""
+    FEATURE_LABELS = {
+        "ml":            "ML Prediction Engine",
+        "prescription":  "Prescriptive AI Insights",
+        "pdf":           "PDF Export",
+        "voice":         "Voice Assistant",
+        "google_sheets": "Google Sheets Connector",
+        "database":      "Database Connector",
+        "white_label":   "White-Label Branding",
+    }
+    label     = FEATURE_LABELS.get(feature_name, feature_name.replace("_"," ").title())
+    plan_map  = {"ml":"Business","prescription":"Business","pdf":"Business",
+                 "voice":"Business","google_sheets":"Business","database":"Business",
+                 "white_label":"Enterprise"}
+    next_plan = plan_map.get(feature_name, "Business")
+    price_map = {"Business":"₹8,000/month","Enterprise":"₹25,000/month"}
+    price     = price_map.get(next_plan,"₹8,000/month")
+
+    if compact:
+        st.warning(
+            f"🔒 **{label}** requires the **{next_plan} plan** ({price}). "
+            f"[Upgrade →](mailto:pankaj@1clickdataanalysis.com?subject=Upgrade to {next_plan})"
+        )
+        return
+
+    st.markdown(f"""
+<div style="background:linear-gradient(135deg,rgba(249,115,22,0.08),rgba(239,68,68,0.05));
+border:1px solid rgba(249,115,22,0.3);border-radius:14px;padding:22px 26px;margin:8px 0;">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+    <span style="font-size:1.5rem;">🔒</span>
+    <div>
+      <div style="font-weight:800;color:#fbbf24;font-size:.95rem;">{label} — {next_plan} Plan Required</div>
+      <div style="color:#64748b;font-size:.8rem;">This feature is not included in your current plan.</div>
+    </div>
+  </div>
+  <a href="mailto:pankaj@1clickdataanalysis.com?subject=Upgrade Request — {next_plan} Plan"
+     style="display:inline-block;background:linear-gradient(135deg,#f97316,#ef4444);
+            color:#fff;padding:9px 20px;border-radius:8px;text-decoration:none;
+            font-weight:700;font-size:.83rem;margin-right:8px;">
+    Upgrade to {next_plan} ({price}) →
+  </a>
+  <a href="https://1clickdataanalysis.com/#pricing"
+     style="display:inline-block;background:rgba(255,255,255,0.06);color:#94a3b8;
+            border:1px solid rgba(255,255,255,0.1);padding:9px 20px;border-radius:8px;
+            text-decoration:none;font-weight:600;font-size:.83rem;">
+    View All Plans
+  </a>
+</div>
+""", unsafe_allow_html=True)
+
 import pandas as pd
 import numpy as np
 import plotly.express as px
