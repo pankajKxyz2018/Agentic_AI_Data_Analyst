@@ -847,6 +847,276 @@ def render_voice_assistant(df, key_suffix="main", engine_label=None, compact=Fal
 
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  🗄️ DATABASE CONNECTOR — MySQL · PostgreSQL · SQLite · SQL Server
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _try_import_sqlalchemy():
+    try:
+        import sqlalchemy
+        return True
+    except ImportError:
+        return False
+
+def render_database_tab():
+    """
+    Database connector UI. Returns (df, source_label) or (None, None).
+    Supports MySQL, PostgreSQL, SQLite file, Microsoft SQL Server.
+    """
+    _db_available = _try_import_sqlalchemy()
+
+    st.markdown("""
+<div style='background:rgba(16,185,129,0.07);border:1px solid rgba(16,185,129,0.25);
+border-radius:12px;padding:16px 20px;margin-bottom:12px'>
+<h4 style='color:#10b981;margin:0 0 4px 0'>🗄️ Database Connector</h4>
+<p style='color:#64748b;font-size:.85rem;margin:0'>
+Connect directly to MySQL, PostgreSQL, SQL Server or SQLite.
+Your credentials are used only for this session and never stored.
+</p></div>
+""", unsafe_allow_html=True)
+
+    if not _db_available:
+        st.warning("""
+⚠️ **SQLAlchemy not installed.** Add to `requirements.txt`:
+```
+sqlalchemy>=2.0.0
+pymysql>=1.1.0
+psycopg2-binary>=2.9.9
+```
+Then redeploy the app.
+        """)
+        return None, None
+
+    # ── DB type selector ──────────────────────────────────────────────────────
+    db_type = st.selectbox(
+        "Database type",
+        ["MySQL", "PostgreSQL", "Microsoft SQL Server", "SQLite (file)"],
+        key="db_type_select",
+        label_visibility="collapsed"
+    )
+
+    if db_type == "SQLite (file)":
+        st.info("💡 For SQLite, upload your `.db` or `.sqlite` file using the **Upload File** tab instead.")
+        return None, None
+
+    # ── Connection form ───────────────────────────────────────────────────────
+    with st.form("db_connection_form"):
+        st.markdown(f"**Connect to {db_type}**")
+
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            host = st.text_input("Host / IP address",
+                placeholder="db.mycompany.com  or  123.45.67.89",
+                key="db_host")
+        with col2:
+            default_port = {"MySQL": 3306, "PostgreSQL": 5432,
+                            "Microsoft SQL Server": 1433}.get(db_type, 3306)
+            port = st.number_input("Port", value=default_port,
+                                   min_value=1, max_value=65535, key="db_port")
+
+        col3, col4 = st.columns(2)
+        with col3:
+            database = st.text_input("Database name",
+                placeholder="my_database", key="db_name")
+        with col4:
+            username = st.text_input("Username",
+                placeholder="admin", key="db_user")
+
+        password = st.text_input("Password", type="password",
+            placeholder="••••••••", key="db_pass")
+
+        use_ssl = st.checkbox("Use SSL/TLS (recommended for cloud databases)",
+                              value=True, key="db_ssl")
+
+        st.markdown("**Load data**")
+        col5, col6 = st.columns([2, 1])
+        with col5:
+            table_name = st.text_input("Table name (leave blank to write custom SQL)",
+                placeholder="orders  or  hr_employees", key="db_table")
+        with col6:
+            row_limit = st.number_input("Row limit", value=50000,
+                min_value=100, max_value=500000, step=1000, key="db_rows",
+                help="Limit rows to prevent memory issues")
+
+        custom_sql = st.text_area("Custom SQL query (optional — overrides table name)",
+            placeholder="SELECT * FROM orders WHERE year = 2024 LIMIT 10000",
+            height=80, key="db_sql")
+
+        connect_btn = st.form_submit_button("🔌 Connect & Load Data",
+                                             type="primary",
+                                             use_container_width=True)
+
+    if not connect_btn:
+        # Show help
+        with st.expander("💡 Connection tips & requirements", expanded=False):
+            st.markdown("""
+**Your database must be publicly accessible:**
+- ✅ AWS RDS with public access enabled
+- ✅ Google Cloud SQL with public IP
+- ✅ PlanetScale, Supabase, Railway, Aiven, Neon (all free tiers work)
+- ✅ Any VPS/server with port open to internet
+- ❌ Database running only on your laptop
+- ❌ Database behind a corporate firewall (without VPN/tunnel)
+
+**Free cloud databases to try:**
+- [PlanetScale](https://planetscale.com) — MySQL, free tier
+- [Neon](https://neon.tech) — PostgreSQL, free tier
+- [Railway](https://railway.app) — MySQL/PostgreSQL, free tier
+- [Supabase](https://supabase.com) — PostgreSQL, free tier
+
+**Security:** Your credentials are held only in your browser session.
+They are never written to disk, logs, or our servers.
+            """)
+        return None, None
+
+    # ── Validate inputs ───────────────────────────────────────────────────────
+    if not host or not host.strip():
+        st.error("❌ Please enter a host / IP address.")
+        return None, None
+    if not database or not database.strip():
+        st.error("❌ Please enter a database name.")
+        return None, None
+    if not username or not username.strip():
+        st.error("❌ Please enter a username.")
+        return None, None
+    if not table_name.strip() and not custom_sql.strip():
+        st.error("❌ Please enter a table name OR a custom SQL query.")
+        return None, None
+
+    # ── Build connection string ───────────────────────────────────────────────
+    try:
+        from sqlalchemy import create_engine, text, inspect
+        import pandas as _pd
+
+        h     = host.strip()
+        db    = database.strip()
+        user  = username.strip()
+        pw    = password
+        p     = int(port)
+
+        if db_type == "MySQL":
+            try:
+                import pymysql
+                driver = "mysql+pymysql"
+            except ImportError:
+                try:
+                    import mysql.connector
+                    driver = "mysql+mysqlconnector"
+                except ImportError:
+                    st.error("❌ MySQL driver not installed. Add `pymysql>=1.1.0` to requirements.txt")
+                    return None, None
+            ssl_args = {"ssl_ca": None} if use_ssl else {}
+            conn_str = f"{driver}://{user}:{pw}@{h}:{p}/{db}"
+            engine = create_engine(conn_str,
+                connect_args={"ssl": {"fake_flag_to_enable_tls": True}} if use_ssl else {},
+                pool_pre_ping=True,
+                pool_timeout=15)
+
+        elif db_type == "PostgreSQL":
+            try:
+                import psycopg2
+                driver = "postgresql+psycopg2"
+            except ImportError:
+                try:
+                    import pg8000
+                    driver = "postgresql+pg8000"
+                except ImportError:
+                    st.error("❌ PostgreSQL driver not installed. Add `psycopg2-binary>=2.9.9` to requirements.txt")
+                    return None, None
+            sslmode = "require" if use_ssl else "disable"
+            conn_str = f"{driver}://{user}:{pw}@{h}:{p}/{db}"
+            engine = create_engine(conn_str,
+                connect_args={"sslmode": sslmode},
+                pool_pre_ping=True,
+                pool_timeout=15)
+
+        elif db_type == "Microsoft SQL Server":
+            try:
+                import pymssql
+                conn_str = f"mssql+pymssql://{user}:{pw}@{h}:{p}/{db}"
+                engine = create_engine(conn_str, pool_pre_ping=True, pool_timeout=15)
+            except ImportError:
+                st.error("❌ SQL Server driver not installed. Add `pymssql>=2.3.0` to requirements.txt")
+                return None, None
+        else:
+            st.error("❌ Unsupported database type.")
+            return None, None
+
+        # ── Test connection + list tables ─────────────────────────────────────
+        with st.spinner(f"🔌 Connecting to {db_type}..."):
+            with engine.connect() as conn:
+                # Test it works
+                conn.execute(text("SELECT 1"))
+
+                # List available tables
+                inspector  = inspect(engine)
+                all_tables = inspector.get_table_names()
+
+        st.success(f"✅ Connected to **{db_type}** — `{db}` on `{h}`")
+
+        if all_tables:
+            st.markdown(f"**{len(all_tables)} table(s) found:**")
+            cols_t = st.columns(min(4, len(all_tables)))
+            for i, t in enumerate(all_tables[:12]):
+                with cols_t[i % 4]:
+                    st.code(t, language=None)
+            if len(all_tables) > 12:
+                st.caption(f"...and {len(all_tables)-12} more")
+
+        # ── Build the SQL query ───────────────────────────────────────────────
+        if custom_sql.strip():
+            query = custom_sql.strip()
+            source_label = f"Custom SQL on {db}"
+        elif table_name.strip():
+            tbl   = table_name.strip()
+            query = f"SELECT * FROM `{tbl}`" if db_type == "MySQL" else f'SELECT * FROM "{tbl}"'
+            query += f" LIMIT {int(row_limit)}"
+            source_label = f"{tbl} ({db}@{h})"
+        else:
+            st.error("❌ No table or SQL query provided.")
+            return None, None
+
+        # ── Load data ─────────────────────────────────────────────────────────
+        with st.spinner(f"📥 Loading data..."):
+            with engine.connect() as conn:
+                df_db = _pd.read_sql(text(query), conn)
+
+        engine.dispose()  # close all connections immediately
+
+        if df_db.empty:
+            st.warning("⚠️ Query returned no rows. Check your table name or SQL.")
+            return None, None
+
+        rows, cols_n = df_db.shape
+        st.success(f"✅ Loaded **{rows:,} rows × {cols_n} columns**")
+        with st.expander("👀 Preview — first 5 rows"):
+            st.dataframe(df_db.head(), use_container_width=True)
+
+        return df_db, source_label
+
+    except Exception as e:
+        err = str(e)
+        # User-friendly error messages
+        if "Access denied" in err or "authentication" in err.lower():
+            st.error("❌ **Authentication failed** — wrong username or password.")
+        elif "Can't connect" in err or "Connection refused" in err or "timeout" in err.lower():
+            st.error(f"""❌ **Cannot reach the database server.**
+
+Possible reasons:
+- Host `{host}` is not reachable from the internet
+- Port `{port}` is blocked by a firewall
+- Database is not running
+
+Check your cloud provider's network/firewall settings to allow inbound connections on port {port}.""")
+        elif "Unknown database" in err or "does not exist" in err:
+            st.error(f"❌ **Database `{database}` not found.** Check the database name.")
+        elif "Table" in err and "doesn't exist" in err:
+            st.error(f"❌ **Table not found.** Available tables are listed above.")
+        else:
+            st.error(f"❌ **Connection error:** {err}")
+        return None, None
+
+
 # ─── Auth Import ──────────────────────────────────────────────────────────────
 try:
     from auth import (render_login_page, render_user_header, render_admin_panel,
@@ -7324,10 +7594,14 @@ def main():
     """, unsafe_allow_html=True)
 
     # ── DATA SOURCE TABS ────────────────────────────────────────────────────
-    tab_upload, tab_sheets = st.tabs(["📂 Upload File", "🔗 Google Sheets"])
+    tab_upload, tab_sheets, tab_db = st.tabs([
+        "📂 Upload File", "🔗 Google Sheets", "🗄️ Database"
+    ])
     f = None
     sheets_df = None
     sheets_fname = None
+    db_df = None
+    db_label = None
 
     with tab_upload:
         f = st.file_uploader("📂 Drop your data file here",
@@ -7368,7 +7642,13 @@ def main():
         else:
             sheets_df, sheets_fname = render_google_sheets_tab()
 
-    has_data = (f is not None) or (sheets_df is not None)
+    with tab_db:
+        if AUTH_ENABLED and not check_plan_limit("database"):
+            render_upgrade_prompt("database", compact=True)
+        else:
+            db_df, db_label = render_database_tab()
+
+    has_data = (f is not None) or (sheets_df is not None) or (db_df is not None)
     if not has_data:
         cols=st.columns(3)
         descriptions=[
@@ -7384,7 +7664,11 @@ def main():
                             unsafe_allow_html=True)
         return
 
-    if sheets_df is not None:
+    if db_df is not None:
+        df = db_df
+        st.success(f"🗄️ Analysing database: **{db_label}** — "
+                   f"{len(df):,} rows × {len(df.columns)} cols")
+    elif sheets_df is not None:
         df = sheets_df
     else:
         with st.spinner("⚙️ Loading data..."):
