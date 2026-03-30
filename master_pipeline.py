@@ -1932,7 +1932,379 @@ def detect_columns(df):
                     del found[loser]
                 break
 
+    # ══════════════════════════════════════════════════════════════════════
+    # Pass 7 — INTELLIGENT DATA-CONTENT ANALYSIS
+    # For ambiguous columns (e.g. "amount", "cost", "value") that matched
+    # multiple keys, analyse actual cell values to determine the best fit.
+    # ══════════════════════════════════════════════════════════════════════
+    found, _mapping_warnings = _intelligent_remap(df, found, num_cols)
+
+    # Store warnings for display in main() — use session_state as bridge
+    try:
+        import streamlit as _st_bridge
+        _st_bridge.session_state["_mapping_warnings"] = _mapping_warnings
+    except Exception:
+        pass
+
     return found
+
+
+def _intelligent_remap(df, found, num_cols):
+    """
+    Analyses actual data content to resolve ambiguous column mappings.
+    Returns (updated_found, list_of_warning_strings).
+
+    Logic:
+    - For each unmapped key, scan every unassigned numeric/text column
+      and score it based on: value range, distribution, column name semantics,
+      and domain-specific statistical signatures.
+    - If a high-confidence match is found → auto-assign.
+    - If a medium-confidence match is found → assign but flag for user review.
+    - If no match → leave unmapped (user will be prompted).
+    """
+    import numpy as _np
+
+    warnings_out = []
+    assigned_cols = set(found.values())
+
+    # ── Helpers ────────────────────────────────────────────────────────────
+    def _stats(col_name):
+        """Get statistical profile of a column."""
+        try:
+            s = pd.to_numeric(df[col_name], errors="coerce").dropna()
+            if len(s) < 2:
+                return None
+            return {
+                "mean":    float(s.mean()),
+                "median":  float(s.median()),
+                "std":     float(s.std()),
+                "min":     float(s.min()),
+                "max":     float(s.max()),
+                "sum":     float(s.sum()),
+                "n":       len(s),
+                "pct_pos": float((s > 0).mean()),
+                "pct_neg": float((s < 0).mean()),
+                "pct_int": float((s == s.round()).mean()),
+                "unique":  int(s.nunique()),
+                "cv":      float(s.std() / s.mean()) if s.mean() != 0 else 0,
+            }
+        except Exception:
+            return None
+
+    def _cat_stats(col_name):
+        """Get categorical profile of a column."""
+        try:
+            s = df[col_name].dropna().astype(str).str.strip()
+            return {
+                "unique":   int(s.nunique()),
+                "n":        len(s),
+                "top5":     s.value_counts().head(5).index.tolist(),
+                "avg_len":  float(s.str.len().mean()),
+                "pct_alpha":float(s.str.isalpha().mean()),
+            }
+        except Exception:
+            return None
+
+    def _col_hint(col_name):
+        """Normalised column name hint tokens."""
+        return norm(col_name).replace("_"," ").split()
+
+    def _score_numeric_key(key, st):
+        """Return confidence score 0-100 for mapping key → column with stats st."""
+        if st is None:
+            return 0
+        score = 0
+
+        # ── SALES / REVENUE ──
+        if key == "sales":
+            if st["mean"] > 100:          score += 25
+            if st["sum"] > 10000:         score += 20
+            if st["pct_pos"] > 0.9:       score += 15
+            if st["pct_neg"] < 0.05:      score += 10
+            if st["unique"] > 50:         score += 10
+            if 0.1 < st["cv"] < 5:        score += 10
+            if st["median"] > 50:         score += 10
+
+        # ── PROFIT / MARGIN ──
+        elif key == "profit":
+            if st["pct_neg"] > 0.05:      score += 20  # profits can be negative
+            if st["mean"] < st.get("_sales_mean", st["mean"]*2): score += 10
+            if st["pct_pos"] > 0.5:       score += 15
+            if st["unique"] > 20:         score += 10
+            if abs(st["cv"]) < 3:         score += 10
+            if st["sum"] > 0:             score += 15
+
+        # ── QUANTITY / UNITS ──
+        elif key == "quantity":
+            if st["pct_int"] > 0.85:      score += 35  # quantities are integers
+            if st["min"] >= 0:            score += 20
+            if 1 <= st["mean"] <= 1000:   score += 20
+            if st["unique"] < 500:        score += 15
+            if st["pct_neg"] < 0.01:      score += 10
+
+        # ── DISCOUNT ──
+        elif key == "discount":
+            if 0 <= st["min"] and st["max"] <= 100: score += 30  # 0-100% range
+            if st["mean"] < 50:           score += 20
+            if st["pct_neg"] < 0.01:      score += 15
+            if st["unique"] < 100:        score += 15
+            if st["pct_int"] > 0.5:       score += 10
+            # Could be absolute discount amount
+            if st["mean"] > 0 and st["mean"] < st["median"] * 3:
+                score += 10
+
+        # ── PRICE / UNIT PRICE ──
+        elif key == "price":
+            if st["mean"] > 1:            score += 15
+            if st["pct_pos"] > 0.95:      score += 20
+            if st["pct_neg"] < 0.01:      score += 20
+            if st["unique"] > 5:          score += 10
+            if st["cv"] < 2:              score += 15
+            if st["min"] > 0:             score += 20
+
+        # ── COST / COGS ──
+        elif key == "cost":
+            if st["pct_pos"] > 0.9:       score += 20
+            if st["pct_neg"] < 0.05:      score += 15
+            if st["mean"] > 0:            score += 15
+            if st["unique"] > 10:         score += 10
+            if st["min"] >= 0:            score += 20
+
+        # ── SALARY ──
+        elif key == "salary":
+            if 1000 <= st["mean"] <= 10000000: score += 30
+            if st["pct_neg"] < 0.01:      score += 20
+            if st["min"] > 0:             score += 20
+            if st["unique"] > 3:          score += 15
+            if st["pct_int"] > 0.5:       score += 15
+
+        # ── AGE ──
+        elif key == "age":
+            if 0 <= st["min"] <= 15:      score += 25
+            if 50 <= st["max"] <= 100:    score += 25
+            if 18 <= st["mean"] <= 65:    score += 30
+            if st["pct_int"] > 0.9:       score += 20
+
+        # ── TENURE / YEARS ──
+        elif key == "tenure":
+            if st["min"] >= 0:            score += 15
+            if st["max"] <= 50:           score += 20
+            if st["mean"] <= 20:          score += 20
+            if st["pct_int"] > 0.7:       score += 20
+            if st["unique"] < 40:         score += 15
+            if st["pct_neg"] < 0.01:      score += 10
+
+        # ── AD SPEND ──
+        elif key == "spend":
+            if st["pct_pos"] > 0.9:       score += 20
+            if st["mean"] > 10:           score += 15
+            if st["sum"] > 100:           score += 15
+            if st["pct_neg"] < 0.05:      score += 20
+            if st["unique"] > 5:          score += 10
+
+        # ── IMPRESSIONS ──
+        elif key == "impressions":
+            if st["mean"] > 100:          score += 25
+            if st["pct_int"] > 0.8:       score += 20
+            if st["pct_pos"] > 0.95:      score += 20
+            if st["min"] >= 0:            score += 20
+            if st["max"] > 1000:          score += 15
+
+        # ── CLICKS ──
+        elif key == "clicks":
+            if st["mean"] < st.get("_impr_mean", 9999): score += 20
+            if st["pct_int"] > 0.9:       score += 25
+            if st["pct_pos"] > 0.95:      score += 20
+            if st["min"] >= 0:            score += 20
+            if st["unique"] < 10000:      score += 15
+
+        # ── CONVERSIONS ──
+        elif key == "conversions":
+            if st["pct_int"] > 0.9:       score += 25
+            if st["min"] >= 0:            score += 20
+            if st["mean"] <= st.get("_click_mean", 9999): score += 20
+            if st["unique"] < 5000:       score += 20
+            if st["pct_pos"] > 0.8:       score += 15
+
+        # ── FRAUD AMOUNT ──
+        elif key == "fraud_amount":
+            if st["pct_pos"] > 0.8:       score += 20
+            if st["unique"] > 100:        score += 15
+            if st["mean"] > 10:           score += 15
+            if st["pct_neg"] < 0.1:       score += 20
+
+        # ── DELIVERY TIME ──
+        elif key == "delivery":
+            if 0 <= st["mean"] <= 60:     score += 30
+            if st["min"] >= 0:            score += 20
+            if st["max"] <= 365:          score += 20
+            if st["pct_int"] > 0.7:       score += 20
+            if st["pct_neg"] < 0.01:      score += 10
+
+        # ── SATISFACTION / RATING ──
+        elif key == "satisfaction":
+            if 1 <= st["min"] and st["max"] <= 10: score += 40
+            if 1 <= st["mean"] <= 5:      score += 30
+            if st["unique"] <= 10:        score += 20
+            if st["pct_neg"] < 0.01:      score += 10
+
+        return min(score, 100)
+
+    def _score_col_name(key, col_name):
+        """Bonus score based on column name similarity to the key."""
+        import difflib as _dl
+        hints = _col_hint(col_name)
+        key_words = key.replace("_"," ").split()
+
+        # Direct keyword match in column name
+        KEY_HINT_MAP = {
+            "sales":       ["sale","revenue","income","turnover","receipt","collection"],
+            "profit":      ["profit","margin","earn","gain","net"],
+            "quantity":    ["qty","quant","unit","count","volume","piece","nos"],
+            "discount":    ["disc","promo","rebate","off","reduction","markdown"],
+            "price":       ["price","rate","mrp","tariff","charge","fee"],
+            "cost":        ["cost","expense","expenditure","outflow","outgoing","cogs","purchase"],
+            "salary":      ["salary","wage","pay","ctc","compensation","remun","emolument"],
+            "age":         ["age","yrs","year","born","dob","old"],
+            "tenure":      ["tenure","service","experience","seniority","duration","length"],
+            "spend":       ["spend","budget","outlay","adspend","adcost","media"],
+            "impressions": ["impress","view","reach","exposure","served"],
+            "clicks":      ["click","visit","tap","hit"],
+            "conversions": ["conv","lead","signup","goal","acquisition","enrolled"],
+            "delivery":    ["delivery","shipping","lead","transit","tat","turnaround","dispatch"],
+            "satisfaction":["satisfaction","rating","score","nps","csat","review","star","feedback"],
+            "fraud_amount":["amount","transaction","txn","transfer","payment"],
+            "quantity":    ["qty","quant","unit","count","sold","dispatch"],
+            "returns":     ["return","refund","cancel","reverse","chargeback"],
+        }
+        keywords = KEY_HINT_MAP.get(key, key_words)
+        col_lower = col_name.lower().replace("_"," ")
+
+        score = 0
+        for kw in keywords:
+            if kw in col_lower:
+                score += 40
+                break
+        # Fuzzy match
+        for hint in hints:
+            for kw in keywords:
+                ratio = _dl.SequenceMatcher(None, hint, kw).ratio()
+                if ratio > 0.8:
+                    score += 25
+                    break
+        return min(score, 60)
+
+    # ── Main remapping loop ────────────────────────────────────────────────
+    # Keys that benefit most from data-content analysis
+    CONTENT_KEYS = [
+        "sales","profit","quantity","discount","price","cost","salary",
+        "age","tenure","spend","impressions","clicks","conversions",
+        "delivery","satisfaction","fraud_amount","returns",
+    ]
+
+    for key in CONTENT_KEYS:
+        if key in found:
+            continue  # already mapped
+
+        best_col   = None
+        best_score = 0
+        scores_log = {}
+
+        for col in df.columns:
+            if col in assigned_cols:
+                continue  # already claimed
+
+            # Get stats
+            st = _stats(col)
+            name_score    = _score_col_name(key, col)
+            content_score = _score_numeric_key(key, st) if st else 0
+
+            # Combined score — name hint is strong signal
+            combined = name_score * 0.5 + content_score * 0.5
+            if name_score >= 40:
+                combined = name_score * 0.4 + content_score * 0.6
+            if name_score == 0 and content_score < 40:
+                combined = 0  # don't assign if no name hint and weak content match
+
+            scores_log[col] = round(combined)
+
+            if combined > best_score:
+                best_score = combined
+                best_col   = col
+
+        if best_col and best_score >= 55:
+            found[key]    = best_col
+            assigned_cols.add(best_col)
+            if best_score < 75:
+                # Medium confidence — flag for review
+                warnings_out.append(
+                    f"⚠️ **{key.replace('_',' ').title()}** → `{best_col}` "
+                    f"(confidence {best_score:.0f}% — please verify in Column Mapping)"
+                )
+        elif best_col and 35 <= best_score < 55:
+            # Low confidence — don't auto-assign, warn user
+            warnings_out.append(
+                f"❓ **{key.replace('_',' ').title()}** could not be auto-mapped. "
+                f"Best candidate: `{best_col}` ({best_score:.0f}% confidence). "
+                f"Please set it manually in Column Mapping."
+            )
+
+    # ── Dedup: ensure each column is used by at most one key ──────────────
+    seen_cols = {}
+    to_remove = []
+    for key, col in found.items():
+        if col in seen_cols:
+            # Keep whichever key is more specific (longer / more domain-specific)
+            existing_key = seen_cols[col]
+            # Simple tiebreak: keep the one that appears first in CONTENT_KEYS
+            ck_order = CONTENT_KEYS + list(found.keys())
+            existing_idx = ck_order.index(existing_key) if existing_key in ck_order else 999
+            new_idx      = ck_order.index(key)          if key in ck_order          else 999
+            if new_idx < existing_idx:
+                to_remove.append(existing_key)
+                seen_cols[col] = key
+            else:
+                to_remove.append(key)
+        else:
+            seen_cols[col] = key
+
+    for k in to_remove:
+        if k in found:
+            del found[k]
+
+    return found, warnings_out
+
+
+def render_mapping_warnings(warnings, domain):
+    """
+    Show intelligent mapping warnings as a collapsible banner.
+    Called right after detect_columns in main().
+    """
+    if not warnings:
+        return
+    ac = DOMAIN_COLOR.get(domain, C["blue"])
+    has_error   = any(w.startswith("❓") for w in warnings)
+    has_warning = any(w.startswith("⚠️") for w in warnings)
+    border_col  = "#ef4444" if has_error else "#f59e0b"
+    icon        = "❓" if has_error else "⚠️"
+    title       = "Column Mapping Needs Your Attention" if has_error else "Column Mapping — Please Verify"
+
+    with st.expander(f"{icon} {title} ({len(warnings)} item{'s' if len(warnings)>1 else ''})",
+                     expanded=has_error):
+        st.markdown(f"""
+<div style="background:rgba(239,68,68,0.05);border-left:3px solid {border_col};
+border-radius:0 8px 8px 0;padding:12px 16px;margin-bottom:8px;">
+<div style="font-size:.82rem;color:#94a3b8;margin-bottom:8px;">
+The intelligent mapping engine analysed your column headers <strong>and data values</strong>
+to auto-assign columns. Items below need your attention:
+</div>
+{''.join(f'<div style="font-size:.83rem;color:#e2e8f0;padding:4px 0;border-bottom:1px solid #1a2d4a;">{w}</div>' for w in warnings)}
+<div style="font-size:.75rem;color:#475569;margin-top:8px;">
+👆 Expand <strong>Column Mapping &amp; Domain Override</strong> below to review and correct.
+</div>
+</div>
+""", unsafe_allow_html=True)
+
 
 # ─── Fraud Check ──────────────────────────────────────────────────────────────
 def is_fraud_dataset(df):
@@ -7538,107 +7910,163 @@ def render_advanced_dashboard(df, found, domain):
 
 
 
-def main():
 
-    # ── LOGIN GATE ─────────────────────────────────────────────────────────────
-    if AUTH_ENABLED and not is_logged_in():
+# ══════════════════════════════════════════════════════════════════════════════
+#  3-PAGE APP ROUTER
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _nav_bar(current_page):
+    """Render the top progress navigation bar."""
+    pages = [
+        ("1", "Login", "landing"),
+        ("2", "Data Prep", "data_prep"),
+        ("3", "Analysis", "analysis"),
+    ]
+    steps_html = ""
+    for num, label, key in pages:
+        if key == current_page:
+            color = "#0ea5e9"
+            bg    = "rgba(14,165,233,0.15)"
+            fw    = "800"
+        elif (key == "data_prep" and current_page == "analysis") or              (key == "landing"   and current_page in ["data_prep","analysis"]):
+            color = "#10b981"
+            bg    = "rgba(16,185,129,0.1)"
+            fw    = "600"
+        else:
+            color = "#334155"
+            bg    = "rgba(255,255,255,0.03)"
+            fw    = "400"
+        steps_html += f"""
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 18px;
+                    background:{bg};border-radius:10px;">
+            <div style="width:26px;height:26px;border-radius:50%;background:{color};
+                        display:flex;align-items:center;justify-content:center;
+                        font-weight:800;font-size:.8rem;color:#fff;">{num}</div>
+            <span style="color:{color};font-weight:{fw};font-size:.85rem;">{label}</span>
+        </div>"""
+    st.markdown(f"""
+<div style="display:flex;align-items:center;gap:6px;
+            background:#050d1a;border-bottom:1px solid #1a2d4a;
+            padding:10px 24px;margin-bottom:20px;
+            position:sticky;top:0;z-index:999;">
+    <div style="font-weight:800;color:#0ea5e9;font-size:.9rem;margin-right:12px;">
+        ⚡ 1 Click
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+        {steps_html}
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  PAGE 1 — LANDING / AUTH
+# ─────────────────────────────────────────────────────────────────────────────
+def render_page1_landing():
+    """Page 1: Login / Sign Up"""
+    st.markdown("""
+<div style="text-align:center;padding:40px 20px 24px;">
+  <div style="font-size:3rem;margin-bottom:8px;">⚡</div>
+  <div style="font-family:'Syne',sans-serif;font-size:2.4rem;font-weight:800;
+              color:#fff;line-height:1.1;margin-bottom:10px;">
+    1 Click Data Analysis
+  </div>
+  <div style="color:#64748b;font-size:1rem;max-width:520px;margin:0 auto;">
+    Anyone Can Do Data Analysis — No Coding. No Training. Just Upload.
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+    if AUTH_ENABLED:
         render_login_page()
-        return
+        if is_logged_in():
+            st.session_state["page"] = "data_prep"
+            st.rerun()
+    else:
+        # No auth — go straight to data prep
+        col1, col2, col3 = st.columns([1,2,1])
+        with col2:
+            if st.button("🚀 Start Analysing →", type="primary",
+                         use_container_width=True):
+                st.session_state["page"] = "data_prep"
+                st.rerun()
 
-    # ── ADMIN PANEL ────────────────────────────────────────────────────────────
-    if AUTH_ENABLED and is_admin():
-        with st.sidebar:
-            if st.sidebar.button("👑 Admin Panel", use_container_width=True):
-                st.session_state["show_admin"] = not st.session_state.get("show_admin", False)
-        if st.session_state.get("show_admin", False):
-            render_admin_panel()
-            return
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  PAGE 2 — DATA PREP WIZARD
+# ─────────────────────────────────────────────────────────────────────────────
+def render_page2_data_prep():
+    """
+    Page 2: 5-step guided data preparation wizard.
+    Step 1 — Data Connection
+    Step 2 — Raw Preview + Cleaning Report
+    Step 3 — Domain Detection
+    Step 4 — Autonomous Column Mapping
+    Step 5 — Final Preview + Confirm
+    """
+    _nav_bar("data_prep")
+
+    # ── Sidebar ──────────────────────────────────────────────────────────────
     with st.sidebar:
-        st.markdown("## 📊 Agentic AI\n### Data Analyst")
+        st.markdown("### ⚡ 1 Click Data Analysis")
         st.markdown("---")
-
-        # ── USER INFO ──────────────────────────────────────────────────────────
         if AUTH_ENABLED:
-            name = st.session_state.get("user_name", "User")
-            company = st.session_state.get("user_company", "")
-            plan = st.session_state.get("user_plan", "Starter").title()
-            st.markdown(
-                f"""<div style="background:linear-gradient(135deg,#0d1829,#0f2040);
-                    border:1px solid #1a2d4a;border-radius:12px;padding:12px 16px;margin-bottom:8px">
-                    <div style="font-size:0.75rem;color:#64748b">Welcome back</div>
-                    <div style="font-weight:700;color:#e2e8f0">{name}</div>
-                    <div style="font-size:0.75rem;color:#0ea5e9">{company}</div>
-                    <div style="font-size:0.7rem;background:rgba(14,165,233,0.1);color:#0ea5e9;
-                        border-radius:4px;padding:2px 8px;margin-top:6px;display:inline-block">
-                        {plan} Plan</div>
-                </div>""",
-                unsafe_allow_html=True
-            )
+            name  = st.session_state.get("user_name", "User")
+            plan  = st.session_state.get("user_plan", "starter").title()
+            st.markdown(f"""
+<div style="background:#0d1829;border:1px solid #1a2d4a;border-radius:10px;
+            padding:10px 14px;margin-bottom:8px;">
+  <div style="font-size:.72rem;color:#64748b;">Welcome</div>
+  <div style="font-weight:700;color:#e2e8f0;">{name}</div>
+  <div style="font-size:.7rem;color:#0ea5e9;margin-top:4px;">{plan} Plan</div>
+</div>""", unsafe_allow_html=True)
             if st.button("🚪 Logout", use_container_width=True):
                 from auth import logout
                 logout()
             st.markdown("---")
-
-        st.markdown("**🗂 Formats:** CSV · Excel · XML · HTML · PDF · SQLite")
+        st.markdown("**Step 2 of 3**")
+        st.markdown("Connect your data, review cleaning, verify column mapping, then proceed to analysis.")
         st.markdown("---")
-        st.markdown("**🎯 Domains**\n💼 Sales · 📣 Marketing\n👥 HR · 🛒 Ecommerce\n🏪 Retail · 🚨 Fraud · 🔍 Generic")
-        st.markdown("---")
-        st.markdown("**🔍 Auto-Detects 40+ column types**")
-        st.markdown(f"\n**LLM:** `{LLM_PROVIDER}`")
+        st.markdown("**Supported Sources:**")
+        st.markdown("📂 CSV · Excel · XML · PDF · SQLite")
+        st.markdown("🔗 Google Sheets")
+        st.markdown("🗄️ MySQL · PostgreSQL · SQL Server")
 
-    st.markdown("""<h1 style='font-size:2.2rem;margin-bottom:.2rem'>
-        ⚡ 1 Click Data Analysis</h1>
-        <p style='color:#64748b;font-size:1rem;margin-top:0'>
-        Upload any dataset — domain-specific KPIs, charts and insights are generated automatically.</p>
-    """, unsafe_allow_html=True)
+    # ── Page header ──────────────────────────────────────────────────────────
+    st.markdown("""
+<h2 style='font-size:1.8rem;margin-bottom:4px;'>🗃️ Data Preparation</h2>
+<p style='color:#64748b;margin-top:0;'>Connect your data, review cleaning results,
+verify column mapping, then confirm to proceed to analysis.</p>
+""", unsafe_allow_html=True)
 
-    # ── DATA SOURCE TABS ────────────────────────────────────────────────────
+    # ── STEP 1: Data Connection ───────────────────────────────────────────────
+    st.markdown("""<div style="background:#0d1829;border-left:3px solid #0ea5e9;
+border-radius:0 10px 10px 0;padding:10px 16px;margin:16px 0 12px;">
+<strong style="color:#0ea5e9;">Step 1 — Connect Your Data</strong>
+</div>""", unsafe_allow_html=True)
+
     tab_upload, tab_sheets, tab_db = st.tabs([
         "📂 Upload File", "🔗 Google Sheets", "🗄️ Database"
     ])
-    f = None
-    sheets_df = None
-    sheets_fname = None
-    db_df = None
-    db_label = None
+    f = None; sheets_df = None; sheets_fname = None
+    db_df = None; db_label = None
 
     with tab_upload:
-        f = st.file_uploader("📂 Drop your data file here",
+        f = st.file_uploader("Drop your data file here",
             type=["csv","txt","xlsx","xls","xml","html","htm","pdf","db","sqlite"],
             label_visibility="collapsed")
         if f is not None:
-            max_mb = get_plan_file_limit_mb() if AUTH_ENABLED else 200
-            file_mb = f.size / (1024 * 1024)
+            max_mb  = get_plan_file_limit_mb() if AUTH_ENABLED else 200
+            file_mb = f.size / (1024*1024)
             if file_mb > max_mb:
-                plan = "Starter" if max_mb == 50 else "Business"
-                st.error(f"""
-### 🚫 File Too Large — {file_mb:.1f}MB uploaded, {max_mb}MB allowed on your {plan} plan
-
-**Your plan limits:**
-| Plan | File Size | Price |
-|------|-----------|-------|
-| Starter | 50MB | ₹2,000/month |
-| Business | 200MB | ₹8,000/month |
-| Enterprise | Custom | ₹25,000/month |
-
-👉 **[Upgrade your plan](mailto:pankaj@1clickdataanalysis.com?subject=Plan Upgrade Request)** to upload larger files.
-""")
-                # 🎙️ Voice alert — speak the file size error aloud
-                tts_msg = (
-                    f"Your file is {file_mb:.0f} megabytes. "
-                    f"The {plan} plan supports up to {max_mb} megabytes only. "
-                    f"To analyse larger files, upgrade to the Business plan at 8,000 rupees per month "
-                    f"which supports up to 200 megabytes. "
-                    f"Contact pankaj at 1 click data analysis dot com to upgrade."
-                )
-                speak_tts(tts_msg)
+                plan_nm = "Starter" if max_mb == 50 else "Business"
+                st.error(f"🚫 File is {file_mb:.1f}MB — your {plan_nm} plan allows {max_mb}MB max.")
+                speak_tts(f"Your file is {file_mb:.0f} megabytes. Your plan allows only {max_mb} megabytes.")
                 st.stop()
 
     with tab_sheets:
         if AUTH_ENABLED and not check_plan_limit("google_sheets"):
             render_upgrade_prompt("google_sheets", compact=True)
-            sheets_df, sheets_fname = None, None
         else:
             sheets_df, sheets_fname = render_google_sheets_tab()
 
@@ -7649,426 +8077,516 @@ def main():
             db_df, db_label = render_database_tab()
 
     has_data = (f is not None) or (sheets_df is not None) or (db_df is not None)
+
     if not has_data:
-        cols=st.columns(3)
-        descriptions=[
-            ("💼 Sales","Revenue trends, top products, profit margin, regional analysis, customer ranking"),
-            ("📣 Marketing","Spend vs ROI, conversion funnel, CTR/CVR by channel, campaign trends"),
-            ("👥 HR","Headcount, salary by dept, gender pay gap, attrition, tenure, hiring trends"),
-            ("🛒 Ecommerce","Revenue, RFM customers, returns, delivery time, payment methods"),
-            ("🏪 Retail","Store performance, product mix, discount impact, regional breakdown"),
-            ("🚨 Fraud","Fraud rate, amount analysis, time patterns, feature correlation")]
-        for i,(title,desc) in enumerate(descriptions):
+        st.markdown("---")
+        st.markdown("**📋 Supported data domains:**")
+        cols = st.columns(3)
+        domains = [
+            ("💼 Sales","Revenue, products, profit, regions, customers"),
+            ("📣 Marketing","Campaigns, CTR, conversions, ROAS"),
+            ("👥 HR","Headcount, salary, attrition, tenure"),
+            ("🛒 Ecommerce","Orders, returns, delivery, payments"),
+            ("🏪 Retail","Store performance, product mix, discounts"),
+            ("🚨 Fraud","Transaction anomalies, risk scores"),
+        ]
+        for i,(t,d) in enumerate(domains):
             with cols[i%3]:
-                st.markdown(f'<div class="insight-box"><strong>{title}</strong><br>{desc}</div>',
+                st.markdown(f"""<div style="background:#0d1829;border:1px solid #1a2d4a;
+border-radius:10px;padding:12px 14px;margin-bottom:8px;">
+<strong style="color:#e2e8f0;">{t}</strong><br>
+<span style="font-size:.78rem;color:#64748b;">{d}</span></div>""",
                             unsafe_allow_html=True)
         return
 
-    if db_df is not None:
-        df = db_df
-        st.success(f"🗄️ Analysing database: **{db_label}** — "
-                   f"{len(df):,} rows × {len(df.columns)} cols")
-    elif sheets_df is not None:
-        df = sheets_df
-    else:
-        with st.spinner("⚙️ Loading data..."):
-            df = load_data(f)
-        if df is None or df.empty:
-            st.error("❌ Failed to load file."); return
+    # ── Load data ─────────────────────────────────────────────────────────────
+    with st.spinner("⚙️ Loading data..."):
+        if db_df is not None:
+            df_raw = db_df.copy()
+            source_label = db_label or "Database"
+        elif sheets_df is not None:
+            df_raw = sheets_df.copy()
+            source_label = sheets_fname or "Google Sheet"
+        else:
+            df_raw = load_data(f)
+            source_label = f.name if f else "Uploaded file"
+            if df_raw is None or df_raw.empty:
+                st.error("❌ Failed to load file — check format."); return
 
-    df     = clean_data(df)
-    found  = detect_columns(df)
-    domain = detect_domain(df, found)
+    st.success(f"✅ Loaded **{len(df_raw):,} rows × {len(df_raw.columns)} columns** from `{source_label}`")
 
+    # ── STEP 2: Cleaning Report ───────────────────────────────────────────────
+    st.markdown("""<div style="background:#0d1829;border-left:3px solid #10b981;
+border-radius:0 10px 10px 0;padding:10px 16px;margin:20px 0 12px;">
+<strong style="color:#10b981;">Step 2 — Data Cleaning</strong>
+</div>""", unsafe_allow_html=True)
+
+    with st.expander("📋 Raw data preview (before cleaning)", expanded=False):
+        st.dataframe(df_raw.head(10), use_container_width=True)
+        nulls_before = int(df_raw.isnull().sum().sum())
+        dups_before  = int(df_raw.duplicated().sum())
+        c1,c2,c3,c4 = st.columns(4)
+        c1.metric("Rows",        f"{len(df_raw):,}")
+        c2.metric("Columns",     f"{len(df_raw.columns)}")
+        c3.metric("Null cells",  f"{nulls_before:,}")
+        c4.metric("Duplicates",  f"{dups_before:,}")
+
+    df_clean = clean_data(df_raw.copy())
+
+    nulls_after = int(df_clean.isnull().sum().sum())
+    dups_after  = int(df_clean.duplicated().sum())
+    rows_removed = len(df_raw) - len(df_clean)
+
+    col1,col2,col3,col4 = st.columns(4)
+    col1.metric("Clean rows",     f"{len(df_clean):,}",
+                f"-{rows_removed}" if rows_removed else "No change")
+    col2.metric("Columns",        f"{len(df_clean.columns)}")
+    col3.metric("Nulls remaining",f"{nulls_after:,}",
+                f"-{nulls_before-nulls_after}" if nulls_before > nulls_after else "0 removed")
+    col4.metric("Duplicates left",f"{dups_after:,}",
+                f"-{dups_before-dups_after}"   if dups_before  > dups_after  else "None")
+
+    st.markdown("**Cleaning actions applied:**")
+    actions = []
+    if dups_before > dups_after:
+        actions.append(f"✅ Removed {dups_before-dups_after:,} duplicate rows")
+    if nulls_before > nulls_after:
+        actions.append(f"✅ Filled / handled {nulls_before-nulls_after:,} null values")
+    actions.append("✅ Column names normalised (whitespace trimmed)")
+    actions.append("✅ Numeric columns auto-detected and parsed")
+    actions.append("✅ Date columns auto-detected and parsed")
+    if not actions:
+        actions.append("✅ Data was already clean — no changes needed")
+    for a in actions:
+        st.markdown(f"&nbsp;&nbsp;{a}")
+
+    # ── STEP 3: Domain Detection ──────────────────────────────────────────────
+    st.markdown("""<div style="background:#0d1829;border-left:3px solid #8b5cf6;
+border-radius:0 10px 10px 0;padding:10px 16px;margin:20px 0 12px;">
+<strong style="color:#8b5cf6;">Step 3 — Domain Detection</strong>
+</div>""", unsafe_allow_html=True)
+
+    found_auto   = detect_columns(df_clean)
+    domain_auto  = detect_domain(df_clean, found_auto)
+    _map_warns   = st.session_state.pop("_mapping_warnings", [])
+
+    domain_colors = {
+        "Sales":"#00d4ff","Marketing":"#ff6b6b","HR":"#a78bfa",
+        "Ecommerce":"#34d399","Retail":"#fbbf24","Fraud":"#ef4444","Generic":"#94a3b8"
+    }
+    dc = domain_colors.get(domain_auto, "#0ea5e9")
+
+    col_d1, col_d2 = st.columns([2,3])
+    with col_d1:
+        st.markdown(f"""
+<div style="background:rgba({','.join(str(int(dc.lstrip('#')[i:i+2],16)) for i in (0,2,4))},0.1);
+     border:2px solid {dc};border-radius:14px;padding:20px;text-align:center;">
+  <div style="font-size:2rem;margin-bottom:6px;">🎯</div>
+  <div style="font-size:1.3rem;font-weight:800;color:{dc};">{domain_auto}</div>
+  <div style="font-size:.78rem;color:#64748b;margin-top:4px;">Auto-detected domain</div>
+</div>""", unsafe_allow_html=True)
+    with col_d2:
+        domain_list = ["Sales","Marketing","HR","Ecommerce","Retail","Fraud","Generic"]
+        domain_override = st.selectbox(
+            "Override domain if incorrect:",
+            domain_list,
+            index=domain_list.index(domain_auto),
+            key="page2_domain_override"
+        )
+        domain = domain_override
+        st.caption(f"Detected {len(found_auto)} column mappings automatically from {len(df_clean.columns)} columns.")
+
+    # ── STEP 4: Autonomous Column Mapping ────────────────────────────────────
+    st.markdown("""<div style="background:#0d1829;border-left:3px solid #f97316;
+border-radius:0 10px 10px 0;padding:10px 16px;margin:20px 0 12px;">
+<strong style="color:#f97316;">Step 4 — Autonomous Column Mapping</strong>
+<span style="color:#64748b;font-size:.8rem;margin-left:8px;">
+Engine analyses headers + data values to map intelligently</span>
+</div>""", unsafe_allow_html=True)
+
+    # Show mapping result table
+    NONE_OPT   = "— not mapped —"
+    all_cols   = [NONE_OPT] + list(df_clean.columns)
+    num_cols_p = [NONE_OPT] + df_clean.select_dtypes(include="number").columns.tolist()
+    dt_cols_p  = [NONE_OPT] + [c for c in df_clean.columns
+                   if pd.api.types.is_datetime64_any_dtype(df_clean[c])
+                   or any(k in c.lower() for k in ["date","time","month","year","period"])]
+
+    # Key catalogue for display
+    KEY_META = {
+        "sales":        ("Revenue / Sales Amount",     "💼", num_cols_p),
+        "profit":       ("Profit / Margin",            "💼", num_cols_p),
+        "quantity":     ("Quantity / Units",           "💼", num_cols_p),
+        "discount":     ("Discount",                   "💼", num_cols_p),
+        "price":        ("Unit Price / MRP",           "💼", num_cols_p),
+        "cost":         ("Unit Cost / COGS",           "💼", num_cols_p),
+        "target":       ("Target / Budget",            "💼", num_cols_p),
+        "date":         ("Date / Time",                "📅", dt_cols_p),
+        "product":      ("Product / Item",             "📅", all_cols),
+        "category":     ("Category",                  "📅", all_cols),
+        "sub_category": ("Sub-Category",              "📅", all_cols),
+        "region":       ("Region / Territory",        "📅", all_cols),
+        "city":         ("City",                      "📅", all_cols),
+        "state":        ("State / Province",          "📅", all_cols),
+        "country":      ("Country",                   "📅", all_cols),
+        "customer":     ("Customer / Client",         "📅", all_cols),
+        "segment":      ("Customer Segment",          "📅", all_cols),
+        "order_id":     ("Order ID / Invoice",        "📅", all_cols),
+        "salary":       ("Salary / CTC",              "👥", num_cols_p),
+        "department":   ("Department",                "👥", all_cols),
+        "job_title":    ("Job Title",                 "👥", all_cols),
+        "employee_id":  ("Employee ID",               "👥", all_cols),
+        "employee_name":("Employee Name",             "👥", all_cols),
+        "gender":       ("Gender",                    "👥", all_cols),
+        "age":          ("Age",                       "👥", num_cols_p),
+        "tenure":       ("Tenure / Experience",       "👥", num_cols_p),
+        "attrition":    ("Attrition / Left",          "👥", all_cols),
+        "hire_date":    ("Hire Date",                 "👥", dt_cols_p),
+        "performance":  ("Performance Rating",        "👥", all_cols),
+        "spend":        ("Ad Spend",                  "📣", num_cols_p),
+        "impressions":  ("Impressions / Views",       "📣", num_cols_p),
+        "clicks":       ("Clicks",                    "📣", num_cols_p),
+        "conversions":  ("Conversions / Leads",       "📣", num_cols_p),
+        "channel":      ("Marketing Channel",         "📣", all_cols),
+        "campaign_id":  ("Campaign Name",             "📣", all_cols),
+        "store":        ("Store / Branch",            "🏪", all_cols),
+        "payment":      ("Payment Method",            "🏪", all_cols),
+        "delivery":     ("Delivery Time",             "🏪", num_cols_p),
+        "returns":      ("Returns / Refunds",         "🏪", all_cols),
+        "satisfaction": ("Satisfaction / NPS",        "🏪", num_cols_p),
+        "fraud_label":  ("Fraud Label",               "🚨", all_cols),
+        "fraud_amount": ("Transaction Amount",        "🚨", num_cols_p),
+        "fraud_time":   ("Transaction Time",          "🚨", dt_cols_p),
+        "fraud_type":   ("Transaction Type",          "🚨", all_cols),
+    }
+
+    # Only show keys relevant to detected domain
+    DOMAIN_KEYS = {
+        "Sales":     ["sales","profit","quantity","discount","price","cost","target",
+                      "date","product","category","sub_category","region","city","state",
+                      "country","customer","segment","order_id"],
+        "Marketing": ["spend","impressions","clicks","conversions","channel","campaign_id",
+                      "date","region","country","segment"],
+        "HR":        ["salary","department","job_title","employee_id","employee_name",
+                      "gender","age","tenure","attrition","hire_date","performance",
+                      "date","region","country"],
+        "Ecommerce": ["sales","quantity","discount","price","date","product","category",
+                      "customer","segment","order_id","payment","delivery","returns",
+                      "satisfaction","region","country","city"],
+        "Retail":    ["sales","quantity","discount","price","date","product","category",
+                      "store","payment","region","city","state","customer","satisfaction"],
+        "Fraud":     ["fraud_label","fraud_amount","fraud_time","fraud_type",
+                      "date","customer","region","country"],
+        "Generic":   list(KEY_META.keys()),
+    }
+    active_keys = DOMAIN_KEYS.get(domain, list(KEY_META.keys()))
+
+    # Build working found dict (editable copy)
+    if "page2_found" not in st.session_state:
+        st.session_state["page2_found"] = dict(found_auto)
+    found_work = st.session_state["page2_found"]
+
+    # Mapping summary table
+    mapped_keys   = [k for k in active_keys if k in found_work and found_work[k]]
+    unmapped_keys = [k for k in active_keys if k not in found_work or not found_work[k]]
+
+    st.markdown(f"""
+<div style="display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap;">
+  <div style="background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);
+       border-radius:8px;padding:8px 16px;font-size:.85rem;">
+    ✅ <strong style="color:#10b981;">{len(mapped_keys)}</strong> auto-mapped
+  </div>
+  <div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);
+       border-radius:8px;padding:8px 16px;font-size:.85rem;">
+    ❓ <strong style="color:#ef4444;">{len(unmapped_keys)}</strong> not mapped
+  </div>
+  <div style="background:rgba(14,165,233,0.08);border:1px solid rgba(14,165,233,0.2);
+       border-radius:8px;padding:8px 16px;font-size:.85rem;">
+    📊 <strong style="color:#0ea5e9;">{len(df_clean.columns)}</strong> total columns
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+    # Mapping warnings from intelligent engine
+    if _map_warns:
+        render_mapping_warnings(_map_warns, domain)
+
+    # Editable mapping table
+    with st.expander(f"🔧 Review & Edit Column Mapping ({len(active_keys)} fields)",
+                     expanded=(len(unmapped_keys) > 0)):
+
+        st.markdown("**Green = auto-mapped  ·  Edit any dropdown to override  ·  Leave blank to skip**")
+        st.markdown("")
+
+        # Group by section icon
+        sections = {}
+        for k in active_keys:
+            meta = KEY_META.get(k)
+            if meta:
+                icon = meta[1]
+                sections.setdefault(icon, []).append(k)
+
+        for icon, keys in sections.items():
+            ICON_LABEL = {"💼":"Sales & Revenue","📅":"Dimensions","👥":"HR",
+                          "📣":"Marketing","🏪":"Retail","🚨":"Fraud","🌍":"Geo"}
+            st.markdown(f"**{icon} {ICON_LABEL.get(icon,'')}**")
+            col_a, col_b = st.columns(2)
+            for i, k in enumerate(keys):
+                meta = KEY_META.get(k)
+                if not meta:
+                    continue
+                lbl, _, opts = meta
+                cur = found_work.get(k, NONE_OPT)
+                safe_cur = cur if cur in opts else NONE_OPT
+                # Colour indicator
+                indicator = "🟢" if safe_cur != NONE_OPT else "🔴"
+                with (col_a if i%2==0 else col_b):
+                    chosen = st.selectbox(
+                        f"{indicator} {lbl}",
+                        opts,
+                        index=opts.index(safe_cur),
+                        key=f"p2_map_{k}"
+                    )
+                    if chosen != NONE_OPT:
+                        found_work[k] = chosen
+                    elif k in found_work:
+                        del found_work[k]
+
+        st.session_state["page2_found"] = found_work
+
+    # Voice assistant for column mapping
+    if (not AUTH_ENABLED) or check_plan_limit("voice"):
+        with st.expander("🎙️ Voice Assistant — Say column names to map", expanded=False):
+            vr = render_voice_assistant(df_clean, key_suffix="prep", compact=True)
+            if vr.get("action") == "column_map" and vr.get("mapping"):
+                for k, v in vr["mapping"].items():
+                    if v in df_clean.columns:
+                        found_work[k] = v
+                st.session_state["page2_found"] = found_work
+                st.rerun()
+
+    # ── STEP 5: Final Preview + Confirm ──────────────────────────────────────
+    st.markdown("""<div style="background:#0d1829;border-left:3px solid #fbbf24;
+border-radius:0 10px 10px 0;padding:10px 16px;margin:20px 0 12px;">
+<strong style="color:#fbbf24;">Step 5 — Final Preview & Confirm</strong>
+</div>""", unsafe_allow_html=True)
+
+    # Data sample
+    st.markdown("**Sample data (10 rows):**")
+    st.dataframe(df_clean.head(10), use_container_width=True)
+
+    # Column summary
+    st.markdown("**Column summary:**")
+    col_summary = []
+    for c in df_clean.columns:
+        dtype  = str(df_clean[c].dtype)
+        nulls  = int(df_clean[c].isnull().sum())
+        unique = int(df_clean[c].nunique())
+        mapped_as = next((k for k,v in found_work.items() if v == c), "—")
+        col_summary.append({
+            "Column": c,
+            "Type":   dtype,
+            "Nulls":  nulls,
+            "Unique": unique,
+            "Mapped As": mapped_as,
+        })
+    summary_df = pd.DataFrame(col_summary)
+    # Colour Mapped As column
+    st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
+    # Stats for numeric columns
+    num_c = df_clean.select_dtypes(include="number").columns.tolist()
+    if num_c:
+        with st.expander("📊 Numeric column statistics"):
+            st.dataframe(df_clean[num_c].describe().round(2), use_container_width=True)
+
+    # Final confirm button
+    st.markdown("---")
+    n_mapped   = len([k for k in found_work if found_work.get(k)])
+    n_unmapped = len([k for k in active_keys if not found_work.get(k)])
+
+    if n_unmapped > 0:
+        st.warning(f"⚠️ {n_unmapped} field(s) are not mapped. You can still proceed — "
+                   f"those features won't be available in the analysis.")
+
+    col_btn1, col_btn2 = st.columns([3,1])
+    with col_btn2:
+        if st.button("✅ Confirm & Analyse →", type="primary",
+                     use_container_width=True):
+            # Save everything to session state
+            st.session_state["df"]           = df_clean
+            st.session_state["found"]        = found_work
+            st.session_state["domain"]       = domain
+            st.session_state["source_label"] = source_label
+            st.session_state["page"]         = "analysis"
+            # Reset page2_found for next time
+            if "page2_found" in st.session_state:
+                del st.session_state["page2_found"]
+            st.rerun()
+    with col_btn1:
+        st.markdown(f"Ready to analyse **{len(df_clean):,} rows** · "
+                    f"**{n_mapped} mapped columns** · Domain: **{domain}**")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  PAGE 3 — ANALYSIS
+# ─────────────────────────────────────────────────────────────────────────────
+def render_page3_analysis():
+    """Page 3: Full analysis with all engines."""
+    # Retrieve state
+    df           = st.session_state.get("df")
+    found        = st.session_state.get("found", {})
+    domain       = st.session_state.get("domain", "Generic")
+    source_label = st.session_state.get("source_label", "Data")
+
+    if df is None or df.empty:
+        st.error("❌ No data found. Please go back to Step 2.")
+        if st.button("← Back to Data Prep"):
+            st.session_state["page"] = "data_prep"
+            st.rerun()
+        return
+
+    _nav_bar("analysis")
+
+    # ── Sidebar ──────────────────────────────────────────────────────────────
+    with st.sidebar:
+        st.markdown("### ⚡ 1 Click Data Analysis")
+        st.markdown("---")
+        if AUTH_ENABLED:
+            name = st.session_state.get("user_name","User")
+            plan = st.session_state.get("user_plan","starter").title()
+            st.markdown(f"""
+<div style="background:#0d1829;border:1px solid #1a2d4a;border-radius:10px;
+            padding:10px 14px;margin-bottom:8px;">
+  <div style="font-weight:700;color:#e2e8f0;">{name}</div>
+  <div style="font-size:.7rem;color:#0ea5e9;">{plan} Plan</div>
+</div>""", unsafe_allow_html=True)
+            if st.button("🚪 Logout", use_container_width=True):
+                from auth import logout
+                logout()
+            st.markdown("---")
+
+        # Data info
+        domain_colors = {
+            "Sales":"#00d4ff","Marketing":"#ff6b6b","HR":"#a78bfa",
+            "Ecommerce":"#34d399","Retail":"#fbbf24","Fraud":"#ef4444","Generic":"#94a3b8"
+        }
+        dc = domain_colors.get(domain,"#0ea5e9")
+        st.markdown(f"""
+<div style="background:#0d1829;border:1px solid #1a2d4a;border-radius:10px;
+            padding:10px 14px;margin-bottom:8px;">
+  <div style="font-size:.7rem;color:#64748b;">Data source</div>
+  <div style="font-size:.82rem;color:#e2e8f0;word-break:break-all;">{source_label}</div>
+  <div style="margin-top:6px;">
+    <span style="background:rgba({','.join(str(int(dc.lstrip('#')[i:i+2],16)) for i in (0,2,4))},0.15);
+    color:{dc};border-radius:6px;padding:2px 8px;font-size:.72rem;font-weight:700;">
+    {domain}</span>
+  </div>
+  <div style="font-size:.72rem;color:#475569;margin-top:6px;">
+    {len(df):,} rows · {len(df.columns)} cols · {len(found)} mapped
+  </div>
+</div>""", unsafe_allow_html=True)
+
+        st.markdown("**LLM:** `" + LLM_PROVIDER + "`")
+        st.markdown("---")
+
+        if st.button("← Back to Data Prep", use_container_width=True):
+            st.session_state["page"] = "data_prep"
+            # Keep df/found/domain so page 2 can restore
+            st.rerun()
+
+        if AUTH_ENABLED and is_admin():
+            if st.button("👑 Admin Panel", use_container_width=True):
+                st.session_state["show_admin"] = not st.session_state.get("show_admin",False)
+
+    if AUTH_ENABLED and is_admin() and st.session_state.get("show_admin"):
+        render_admin_panel()
+        return
+
+    # ── Page header ──────────────────────────────────────────────────────────
     badge = f"badge-{domain.lower()}"
     st.markdown(
         f'<span class="domain-badge {badge}">🎯 {domain}</span> &nbsp;'
-        f'<span style="color:#64748b;font-size:.9rem">'
+        f'<span style="color:#64748b;font-size:.9rem;">'
         f'{len(df):,} rows × {len(df.columns)} cols &nbsp;|&nbsp; '
-        f'Detected: <code>{"</code> <code>".join(found.keys())}</code></span>',
+        f'Mapped: <code>{"</code> <code>".join(found.keys())}</code></span>',
         unsafe_allow_html=True)
 
-    # ── Anomaly Detection Banner (runs immediately on load) ─────────────
+    # ── Anomaly banner ────────────────────────────────────────────────────────
     anomalies = detect_anomalies(df, found, domain)
     render_anomaly_banner(anomalies, domain)
 
-    # ── Voice Assistant ───────────────────────────────────────────────────
-    # ── Voice plan gate ────────────────────────────────────────────────────
+    # ── Voice Assistant (main) ────────────────────────────────────────────────
     _voice_allowed = (not AUTH_ENABLED) or check_plan_limit("voice")
-    _voice_label   = "🎙️ Voice Assistant — Column Selection, Chart Requests & Column Mapping"
+    _voice_label   = "🎙️ Voice Assistant — Charts, Columns & Analysis"
     if AUTH_ENABLED and not _voice_allowed:
-        _voice_label += " 🔒 Business Plan Required"
+        _voice_label += " 🔒 Business Plan"
     with st.expander(_voice_label, expanded=False):
         if AUTH_ENABLED and not _voice_allowed:
             render_upgrade_prompt("voice", compact=True)
         else:
-            pass
-        if not (AUTH_ENABLED and not _voice_allowed):
-          st.markdown("""
-<div style='background:rgba(139,92,246,0.06);border:1px solid rgba(139,92,246,0.2);
-border-radius:10px;padding:12px 16px;margin-bottom:10px;font-size:.82rem;color:#94a3b8;'>
-<strong style='color:#a78bfa;'>💡 What you can say:</strong><br>
-🗣️ <em>"Show me only Sales, Region, Product and Profit"</em> — selects those columns<br>
-🗣️ <em>"Give me a bar chart of Revenue"</em> — generates the chart instantly<br>
-🗣️ <em>"Sales Amount should be revenue column"</em> — maps a column<br>
-🗣️ <em>"How large a file can I upload?"</em> — speaks your plan limits
-</div>
-""", unsafe_allow_html=True)
+            st.markdown("""<div style='background:rgba(139,92,246,0.06);
+border:1px solid rgba(139,92,246,0.2);border-radius:10px;padding:12px 16px;
+margin-bottom:10px;font-size:.82rem;color:#94a3b8;'>
+<strong style='color:#a78bfa;'>💡 Try saying:</strong><br>
+🗣️ <em>"Give me a bar chart of Revenue"</em> &nbsp;·&nbsp;
+🗣️ <em>"Show me only Sales, Region and Profit"</em><br>
+🗣️ <em>"Sales Amount is revenue column"</em> &nbsp;·&nbsp;
+🗣️ <em>"How large a file can I upload?"</em>
+</div>""", unsafe_allow_html=True)
+            voice_result = render_voice_assistant(df, key_suffix="main")
+            if voice_result["action"] and voice_result["message"]:
+                if voice_result["message"].startswith("✅"):
+                    st.success(voice_result["message"])
+                elif voice_result["message"].startswith("❌"):
+                    st.warning(voice_result["message"])
+                else:
+                    st.info(voice_result["message"])
+                if voice_result.get("tts"):
+                    speak_tts(voice_result["tts"])
+                if voice_result["action"] == "column_select" and voice_result["columns"]:
+                    st.session_state["voice_selected_cols"] = voice_result["columns"]
+                if voice_result["action"] == "column_map" and voice_result["mapping"]:
+                    for key, col in voice_result["mapping"].items():
+                        if col in df.columns:
+                            found[key] = col
+                    st.session_state["found"] = found
 
-        # Store KEY_CATALOGUE keys for voice mapping parser
-        if "voice_input_main" not in st.session_state:
-            st.session_state["voice_input_main"] = ""
-
-        voice_result = render_voice_assistant(df, key_suffix="main")
-
-        # ── Process voice result ───────────────────────────────────────
-        if voice_result["action"] and voice_result["message"]:
-            # Show message
-            is_ok = voice_result["message"].startswith("✅")
-            if is_ok:
-                st.success(voice_result["message"])
-            elif voice_result["message"].startswith("❌"):
-                st.warning(voice_result["message"])
-            else:
-                st.info(voice_result["message"])
-
-            # Speak the TTS
-            if voice_result.get("tts"):
-                speak_tts(voice_result["tts"])
-
-            # Apply column selection → update found
-            if voice_result["action"] == "column_select" and voice_result["columns"]:
-                st.markdown(f"**Columns selected by voice:** `{'`, `'.join(voice_result['columns'])}`")
-                st.markdown("👇 These columns are highlighted in the Column Mapping section below.")
-                if "voice_selected_cols" not in st.session_state:
-                    st.session_state["voice_selected_cols"] = []
-                st.session_state["voice_selected_cols"] = voice_result["columns"]
-
-            # Apply column mapping
-            if voice_result["action"] == "column_map" and voice_result["mapping"]:
-                for key, col in voice_result["mapping"].items():
-                    if col in df.columns:
-                        found[key] = col
-                st.markdown("**Mappings applied:** " +
-                            ", ".join(f"`{v}` → `{k}`" for k,v in voice_result["mapping"].items()))
-
-            # Chart request — generate immediately
-            if voice_result["action"] == "chart" and voice_result.get("col_name"):
-                ct   = voice_result["chart_type"]
-                col  = voice_result["col_name"]
-                cur  = detect_currency(df)
-                ac   = DOMAIN_COLOR.get(domain, C["blue"])
-                st.markdown(f"**Generating {ct} chart for `{col}`:**")
-                try:
-                    if ct == "pie":
-                        vc = df[col].value_counts().head(8)
-                        fig = px.pie(values=vc.values, names=vc.index,
-                                     title=f"{col} — Distribution",
-                                     color_discrete_sequence=px.colors.sequential.Blues_r)
-                        fig.update_layout(**cd(320))
-                        st.plotly_chart(fig, use_container_width=True)
-                    elif ct == "bar":
-                        if pd.api.types.is_numeric_dtype(df[col]):
-                            num_cols_v = df.select_dtypes(include="number").columns.tolist()
-                            cat_cols_v = df.select_dtypes(include="object").columns.tolist()
-                            if cat_cols_v:
-                                grp = df.groupby(cat_cols_v[0])[col].sum().sort_values(ascending=False).head(15)
-                                fig = px.bar(x=grp.index, y=grp.values,
-                                             labels={"x":cat_cols_v[0],"y":col},
-                                             title=f"{col} by {cat_cols_v[0]}",
-                                             color=grp.values,
-                                             color_continuous_scale=["#1e3a5f", ac])
-                            else:
-                                fig = px.histogram(df, x=col, title=f"Distribution of {col}",
-                                                   color_discrete_sequence=[ac])
-                        else:
-                            vc = df[col].value_counts().head(15)
-                            fig = px.bar(x=vc.index, y=vc.values,
-                                         labels={"x":col,"y":"Count"},
-                                         title=f"{col} — Top Values",
-                                         color=vc.values,
-                                         color_continuous_scale=["#1e3a5f", ac])
-                        fig.update_layout(**cd(320))
-                        st.plotly_chart(fig, use_container_width=True)
-                    elif ct == "line":
-                        date_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])
-                                     or any(k in c.lower() for k in ["date","month","year","period"])]
-                        num_c2 = [c for c in df.select_dtypes(include="number").columns if c != col]
-                        if date_cols:
-                            dc_v = date_cols[0]
-                            y_col = col if pd.api.types.is_numeric_dtype(df[col]) else (num_c2[0] if num_c2 else col)
-                            fig = px.line(df.sort_values(dc_v), x=dc_v, y=y_col,
-                                          title=f"{y_col} Trend over {dc_v}",
-                                          color_discrete_sequence=[ac])
-                        else:
-                            fig = px.line(df.reset_index(), x="index", y=col,
-                                          title=f"{col} — Line Chart",
-                                          color_discrete_sequence=[ac])
-                        fig.update_layout(**cd(320))
-                        st.plotly_chart(fig, use_container_width=True)
-                    elif ct == "scatter":
-                        num_cols_sc = df.select_dtypes(include="number").columns.tolist()
-                        if len(num_cols_sc) >= 2:
-                            x_c = col if col in num_cols_sc else num_cols_sc[0]
-                            y_c = [c for c in num_cols_sc if c != x_c][0]
-                            fig = px.scatter(df, x=x_c, y=y_c,
-                                             title=f"{x_c} vs {y_c} — Scatter Plot",
-                                             color_discrete_sequence=[ac])
-                            fig.update_layout(**cd(320))
-                            st.plotly_chart(fig, use_container_width=True)
-                        else:
-                            st.warning("Scatter plot needs at least 2 numeric columns.")
-                    elif ct == "histogram":
-                        fig = px.histogram(df, x=col, title=f"Distribution of {col}",
-                                           color_discrete_sequence=[ac], nbins=30)
-                        fig.update_layout(**cd(300))
-                        st.plotly_chart(fig, use_container_width=True)
-                    elif ct == "heatmap":
-                        num_cols_hm = df.select_dtypes(include="number").columns.tolist()
-                        if len(num_cols_hm) >= 2:
-                            corr = df[num_cols_hm[:12]].corr()
-                            fig = px.imshow(corr, title="Correlation Heatmap",
-                                            color_continuous_scale="RdBu_r",
-                                            text_auto=".2f")
-                            fig.update_layout(**cd(420))
-                            st.plotly_chart(fig, use_container_width=True)
-                        else:
-                            st.warning("Heatmap needs at least 2 numeric columns.")
-                    elif ct == "area":
-                        date_cols_a = [c for c in df.columns if any(k in c.lower()
-                                       for k in ["date","month","year","period"])]
-                        y_col_a = col if pd.api.types.is_numeric_dtype(df[col]) else None
-                        if date_cols_a and y_col_a:
-                            fig = px.area(df.sort_values(date_cols_a[0]),
-                                          x=date_cols_a[0], y=y_col_a,
-                                          title=f"{y_col_a} — Area Chart",
-                                          color_discrete_sequence=[ac])
-                            fig.update_layout(**cd(300))
-                            st.plotly_chart(fig, use_container_width=True)
-                        else:
-                            st.warning("Area chart works best with a date column + numeric column.")
-                    elif ct == "treemap":
-                        cat_cols_tm = df.select_dtypes(include="object").columns.tolist()
-                        num_cols_tm = df.select_dtypes(include="number").columns.tolist()
-                        if cat_cols_tm and num_cols_tm:
-                            val_col = num_cols_tm[0]
-                            fig = px.treemap(df, path=[cat_cols_tm[0]],
-                                             values=val_col,
-                                             title=f"Treemap: {cat_cols_tm[0]} by {val_col}",
-                                             color=val_col,
-                                             color_continuous_scale=["#1e3a5f", ac])
-                            fig.update_layout(**cd(380))
-                            st.plotly_chart(fig, use_container_width=True)
-                        else:
-                            st.warning("Treemap needs a categorical and a numeric column.")
-                except Exception as e:
-                    st.error(f"Chart error: {e}")
-
-    # ── Column Mapping & Domain Override ────────────────────────────────────
+    # ── Column Mapping override (collapsed) ───────────────────────────────────
     with st.expander("⚙️ Column Mapping & Domain Override", expanded=False):
-
-        # ── Domain selector ──────────────────────────────────────────────
-        st.markdown("**🎯 Detected Domain — change if wrong:**")
         domain_list = ["Sales","Marketing","HR","Ecommerce","Retail","Fraud","Generic"]
         domain = st.selectbox("Domain", domain_list,
-            index=domain_list.index(domain), key="domain_override",
+            index=domain_list.index(domain), key="p3_domain_override",
             label_visibility="collapsed")
         st.markdown("---")
-        st.markdown("**🔗 Column Mappings** — auto-detected. Change any dropdown to override. "
-                    "Set *— not mapped —* to remove.")
-        st.markdown("")
-
-        # ── Build option lists ────────────────────────────────────────────
-        NONE  = "— not mapped —"
-        all_c = [NONE] + list(df.columns)
-        num_c = [NONE] + df.select_dtypes(include="number").columns.tolist()
-        dt_c  = [NONE] + [c for c in df.columns
-                          if pd.api.types.is_datetime64_any_dtype(df[c])
-                          or any(k in c.lower() for k in ["date","time","month","year","period"])]
-
-        # ── Key catalogue: (label, options, section) ─────────────────────
-        KEY_CATALOGUE = {
-            # ══ 💼 SALES & REVENUE ═══════════════════════════════════════════
-            "sales":        ("Revenue / Sales Amount",       num_c, "💼 Sales & Revenue"),
-            "profit":       ("Profit / Net Income",          num_c, "💼 Sales & Revenue"),
-            "quantity":     ("Quantity / Units Sold",        num_c, "💼 Sales & Revenue"),
-            "discount":     ("Discount / Promo Amount",      num_c, "💼 Sales & Revenue"),
-            "price":        ("Unit Price / MRP",             num_c, "💼 Sales & Revenue"),
-            "cost":         ("Unit Cost / COGS",             num_c, "💼 Sales & Revenue"),
-            "target":       ("Target / Budget / Forecast",   num_c, "💼 Sales & Revenue"),
-            "sales_rep":    ("Sales Rep / Account Manager",  all_c, "💼 Sales & Revenue"),
-            "vendor":       ("Vendor / Supplier",            all_c, "💼 Sales & Revenue"),
-
-            # ══ 📅 DIMENSIONS ════════════════════════════════════════════════
-            "date":         ("Date / Transaction Date",      dt_c,  "📅 Dimensions"),
-            "product":      ("Product / Item Name",          all_c, "📅 Dimensions"),
-            "category":     ("Category / Product Group",     all_c, "📅 Dimensions"),
-            "sub_category": ("Sub-Category",                 all_c, "📅 Dimensions"),
-            "region":       ("Region / Territory / Zone",    all_c, "📅 Dimensions"),
-            "city":         ("City / Town",                  all_c, "📅 Dimensions"),
-            "state":        ("State / Province",             all_c, "📅 Dimensions"),
-            "country":      ("Country",                      all_c, "📅 Dimensions"),
-            "postal_code":  ("Postal Code / PIN / ZIP",      all_c, "📅 Dimensions"),
-            "customer":     ("Customer / Client / Account",  all_c, "📅 Dimensions"),
-            "segment":      ("Customer Segment / Tier",      all_c, "📅 Dimensions"),
-            "ship_mode":    ("Shipping Mode / Carrier",      all_c, "📅 Dimensions"),
-            "order_id":     ("Order ID / Invoice / PO No",   all_c, "📅 Dimensions"),
-            "distribution_channel": ("Distribution Channel", all_c, "📅 Dimensions"),
-
-            # ══ 👥 HR ════════════════════════════════════════════════════════
-            "salary":       ("Salary / CTC / Compensation",  num_c, "👥 HR"),
-            "department":   ("Department / Division / BU",   all_c, "👥 HR"),
-            "job_title":    ("Job Title / Designation",      all_c, "👥 HR"),
-            "employee_id":  ("Employee ID / Payroll ID",     all_c, "👥 HR"),
-            "employee_name":("Employee Name",                all_c, "👥 HR"),
-            "gender":       ("Gender",                       all_c, "👥 HR"),
-            "age":          ("Age",                          num_c, "👥 HR"),
-            "age_group":    ("Age Group / Band",             all_c, "👥 HR"),
-            "tenure":       ("Tenure / Years of Service",    num_c, "👥 HR"),
-            "attrition":    ("Attrition / Left Company",     all_c, "👥 HR"),
-            "hire_date":    ("Hire / Joining Date",          dt_c,  "👥 HR"),
-            "performance":  ("Performance Rating",           all_c, "👥 HR"),
-            "education":    ("Education Level",              all_c, "👥 HR"),
-            "marital":      ("Marital Status",               all_c, "👥 HR"),
-
-            # ══ 📣 MARKETING ═════════════════════════════════════════════════
-            "spend":        ("Ad Spend / Marketing Cost",    num_c, "📣 Marketing"),
-            "revenue":      ("Campaign Revenue / Value",     num_c, "📣 Marketing"),
-            "impressions":  ("Impressions / Views / Reach",  num_c, "📣 Marketing"),
-            "clicks":       ("Clicks / Visits",              num_c, "📣 Marketing"),
-            "conversions":  ("Conversions / Leads",          num_c, "📣 Marketing"),
-            "roi":          ("ROI / ROAS",                   num_c, "📣 Marketing"),
-            "ctr":          ("CTR / Click Rate",             num_c, "📣 Marketing"),
-            "channel":      ("Marketing Channel / Platform", all_c, "📣 Marketing"),
-            "campaign_id":  ("Campaign Name / ID",           all_c, "📣 Marketing"),
-            "demography":   ("Demography / Audience Segment",all_c, "📣 Marketing"),
-
-            # ══ 🏪 RETAIL / ECOMMERCE ════════════════════════════════════════
-            "store":          ("Store / Branch / Outlet",      all_c, "🏪 Retail"),
-            "payment":        ("Payment Method / Mode",        all_c, "🏪 Retail"),
-            "delivery":       ("Delivery Time / Lead Time",    num_c, "🏪 Retail"),
-            "returns":        ("Returns / Refund Status",      all_c, "🏪 Retail"),
-            "satisfaction":   ("Satisfaction / NPS / Rating",  num_c, "🏪 Retail"),
-            "loyalty_points": ("Loyalty Points / Rewards",     num_c, "🏪 Retail"),
-            "device":         ("Device / Platform / Channel",  all_c, "🏪 Retail"),
-            "return_reason":  ("Return / Cancellation Reason", all_c, "🏪 Retail"),
-            "shipping_country":("Shipping Country",            all_c, "🏪 Retail"),
-
-            # ══ 🚨 FRAUD ══════════════════════════════════════════════════════
-            "fraud_label":  ("Fraud Label / Class",          all_c, "🚨 Fraud"),
-            "fraud_amount": ("Transaction Amount",           num_c, "🚨 Fraud"),
-            "fraud_time":   ("Transaction Time / Date",      dt_c,  "🚨 Fraud"),
-            "fraud_type":   ("Transaction / Fraud Type",     all_c, "🚨 Fraud"),
-            "fraud_id":     ("Transaction / Case ID",        all_c, "🚨 Fraud"),
-            "fraud_channel":("Channel / Device / Entry",     all_c, "🚨 Fraud"),
-            "fraud_loc":    ("Location / Merchant / MCC",    all_c, "🚨 Fraud"),
-            "fraud_score":  ("Risk / Anomaly Score",         num_c, "🚨 Fraud"),
-            "balance":      ("Account Balance",              num_c, "🚨 Fraud"),
-
-            # ══ 🌍 GEO ════════════════════════════════════════════════════════
-            "latitude":     ("Latitude",                     num_c, "🌍 Geo"),
-            "longitude":    ("Longitude",                    num_c, "🌍 Geo"),
-        }
-
-        DOMAIN_SECTIONS = {
-            "Sales":     ["💼 Sales & Revenue", "📅 Dimensions",
-                          "🏪 Retail", "📣 Marketing"],
-            "Marketing": ["📣 Marketing", "📅 Dimensions",
-                          "💼 Sales & Revenue", "🏪 Retail"],
-            "HR":        ["👥 HR", "📅 Dimensions",
-                          "💼 Sales & Revenue"],
-            "Ecommerce": ["💼 Sales & Revenue", "📅 Dimensions",
-                          "🏪 Retail", "📣 Marketing"],
-            "Retail":    ["💼 Sales & Revenue", "📅 Dimensions",
-                          "🏪 Retail", "📣 Marketing"],
-            "Fraud":     ["🚨 Fraud", "📅 Dimensions",
-                          "💼 Sales & Revenue"],
-            "Generic":   ["💼 Sales & Revenue", "📅 Dimensions", "👥 HR",
-                          "📣 Marketing", "🏪 Retail", "🚨 Fraud", "🌍 Geo"],
-        }
-        active_secs = DOMAIN_SECTIONS.get(domain, list(KEY_CATALOGUE.keys()))
-
-        # ── Step 1: Deduplicate found — each dataset column → at most ONE key
-        # Priority = order keys appear in KEY_CATALOGUE
-        col_claimed = {}
-        for _key in list(KEY_CATALOGUE.keys()):
-            _col = found.get(_key)
-            if _col and _col != NONE:
-                if _col not in col_claimed:
-                    col_claimed[_col] = _key
-                else:
-                    # Already claimed by higher-priority key → clear this one
-                    del found[_key]
-
-        # ── Step 2: Group keys by section
-        by_section = {}
-        for k,(lbl,opts,sec) in KEY_CATALOGUE.items():
-            by_section.setdefault(sec,[]).append((k,lbl,opts))
-
-        # ── Step 3: Render — one dropdown per row (no st.columns nesting)
-        for sec_name, sec_items in by_section.items():
-            is_active = sec_name in active_secs
-            color     = "#00d4ff" if is_active else "#475569"
-            inactive_note = (
-                "  <span style='font-weight:400;color:#475569;font-size:.8rem'>"
-                "— not used for this domain</span>" if not is_active else "")
-            st.markdown(
-                f"<p style='font-weight:700;color:{color};"
-                f"margin:18px 0 4px 0;font-size:.92rem'>"
-                f"{sec_name}{inactive_note}</p>",
-                unsafe_allow_html=True)
-            if not is_active:
-                st.caption("Not active for this domain. Set manually if needed.")
-
-            for (k, lbl, opts) in sec_items:
-                cur      = found.get(k, NONE)
-                safe_cur = cur if cur in opts else NONE
-                disabled = (not is_active and safe_cur == NONE)
-                chosen   = st.selectbox(
-                    label   = lbl,
-                    options = opts,
-                    index   = opts.index(safe_cur),
-                    key     = f"cm_{k}",
-                    disabled= disabled,
-                    help    = (f"Auto-detected: {cur}" if cur != NONE
-                               else "Not auto-detected — select manually if needed"),
-                )
-                # Update found AND enforce no-duplicate on user changes
-                if chosen != NONE:
-                    # If this col was claimed by another key, release it first
-                    old_owner = col_claimed.get(chosen)
-                    if old_owner and old_owner != k and old_owner in found:
-                        del found[old_owner]
-                    col_claimed[chosen] = k
+        NONE2  = "— not mapped —"
+        all_c2 = [NONE2] + list(df.columns)
+        num_c2 = [NONE2] + df.select_dtypes(include="number").columns.tolist()
+        dt_c2  = [NONE2] + [c for c in df.columns
+                    if pd.api.types.is_datetime64_any_dtype(df[c])
+                    or any(k in c.lower() for k in ["date","time","month","year","period"])]
+        st.markdown("**Quick overrides — change only what needs correction:**")
+        important_keys = [
+            ("sales","Revenue / Sales",num_c2),("profit","Profit",num_c2),
+            ("quantity","Quantity",num_c2),("date","Date",dt_c2),
+            ("product","Product",all_c2),("category","Category",all_c2),
+            ("region","Region",all_c2),("customer","Customer",all_c2),
+            ("salary","Salary",num_c2),("department","Department",all_c2),
+            ("attrition","Attrition",all_c2),
+        ]
+        c1,c2 = st.columns(2)
+        for i,(k,lbl,opts) in enumerate(important_keys):
+            cur = found.get(k, NONE2)
+            safe = cur if cur in opts else NONE2
+            with (c1 if i%2==0 else c2):
+                chosen = st.selectbox(lbl, opts, index=opts.index(safe), key=f"p3_{k}")
+                if chosen != NONE2:
                     found[k] = chosen
                 elif k in found:
                     del found[k]
-                    if cur in col_claimed and col_claimed[cur] == k:
-                        del col_claimed[cur]
+        st.session_state["found"] = found
 
-        # ── Duplicate Warning ──────────────────────────────────────────────
-        st.markdown("---")
-        col_usage = {}
-        for k, v in found.items():
-            col_usage.setdefault(v, []).append(k)
-        dupes = {c: ks for c, ks in col_usage.items() if len(ks) > 1}
-        if dupes:
-            dupe_lines = [f"- **{dc}** → {', '.join(dks)}" for dc,dks in dupes.items()]
-            st.warning("Duplicate mapping — same column used for multiple keys:\n"
-                       + "\n".join(dupe_lines))
-
-        # ── Active mappings summary ────────────────────────────────────────
-        st.markdown("**✅ Active Mappings:**")
-        if found:
-            td = pd.DataFrame([{"Key": k, "→ Dataset Column": v}
-                                for k,v in sorted(found.items())])
-            st.dataframe(td, use_container_width=True, hide_index=True)
-
-    with st.expander("🔍 Preview Raw Data"):
-        st.dataframe(df.head(50),use_container_width=True)
-        st.caption(f"First 50 of {len(df):,} rows · {len(df.columns)} columns")
-
-    # ── Domain Routing ────────────────────────────────────────────────────
+    # ── Domain Routing (existing engine) ──────────────────────────────────────
     if domain=="Sales":         render_sales(df, found)
     elif domain=="Marketing":   render_marketing(df, found)
     elif domain=="HR":          render_hr(df, found)
@@ -8077,7 +8595,8 @@ border-radius:10px;padding:12px 16px;margin-bottom:10px;font-size:.82rem;color:#
     elif domain=="Fraud":       render_fraud(df, found)
     else:                       render_generic(df, found)
 
-    render_one_click_story(df, found, domain)   # ⚡ FIRST — flagship feature
+    # ── All engines ───────────────────────────────────────────────────────────
+    render_one_click_story(df, found, domain)
     render_advanced_dashboard(df, found, domain)
     render_eda(df, found, domain)
     render_prediction(df, found, domain)
@@ -8087,6 +8606,50 @@ border-radius:10px;padding:12px 16px;margin-bottom:10px;font-size:.82rem;color:#
     render_qa(df, domain, found)
     render_nlq(df, domain, found)
     render_pdf_export(df, found, domain)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  MAIN ROUTER
+# ─────────────────────────────────────────────────────────────────────────────
+def main():
+    # ── Initialise page state ──────────────────────────────────────────────
+    if "page" not in st.session_state:
+        st.session_state["page"] = "landing" if AUTH_ENABLED else "data_prep"
+
+    # ── Auto-advance if already logged in ──────────────────────────────────
+    if AUTH_ENABLED and is_logged_in() and st.session_state["page"] == "landing":
+        st.session_state["page"] = "data_prep"
+
+    # ── Admin panel shortcut ────────────────────────────────────────────────
+    if AUTH_ENABLED and is_admin() and st.session_state.get("show_admin"):
+        _nav_bar(st.session_state["page"])
+        render_admin_panel()
+        return
+
+    # ── Route to page ──────────────────────────────────────────────────────
+    page = st.session_state.get("page", "landing")
+
+    if page == "landing":
+        render_page1_landing()
+
+    elif page == "data_prep":
+        if AUTH_ENABLED and not is_logged_in():
+            st.session_state["page"] = "landing"
+            st.rerun()
+        render_page2_data_prep()
+
+    elif page == "analysis":
+        if AUTH_ENABLED and not is_logged_in():
+            st.session_state["page"] = "landing"
+            st.rerun()
+        if "df" not in st.session_state:
+            st.session_state["page"] = "data_prep"
+            st.rerun()
+        render_page3_analysis()
+
+    else:
+        st.session_state["page"] = "landing"
+        st.rerun()
 
 
 if __name__=="__main__":
