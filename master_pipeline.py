@@ -7916,43 +7916,47 @@ def render_advanced_dashboard(df, found, domain):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _nav_bar(current_page):
-    """Render the top progress navigation bar using st.columns for reliability."""
-    # Step definitions
-    steps = [
-        ("1", "🔐 Login",     "landing"),
-        ("2", "🗃️ Data Prep", "data_prep"),
-        ("3", "📊 Analysis",  "analysis"),
-    ]
+    """Render progress nav bar — fully visible on all screen sizes."""
     ORDER = {"landing": 0, "data_prep": 1, "analysis": 2}
     current_idx = ORDER.get(current_page, 0)
-
-    cols = st.columns([1, 3, 3, 3, 1])
-    cols[0].markdown("**⚡**")
-    for i, (num, label, key) in enumerate(steps):
+    steps = [
+        ("🔐", "Login",    "landing"),
+        ("🗃️", "Data Prep","data_prep"),
+        ("📊", "Analysis", "analysis"),
+    ]
+    # Build as single markdown line — always fits
+    parts = []
+    for icon, label, key in steps:
         idx = ORDER[key]
         if idx < current_idx:
-            # Completed
-            cols[i+1].markdown(
-                f"<div style='background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);"
-                f"border-radius:10px;padding:8px 12px;text-align:center;'>"
-                f"<span style='color:#10b981;font-weight:700;font-size:.85rem;'>✅ {label}</span>"
-                f"</div>", unsafe_allow_html=True)
+            parts.append(
+                f"<span style='background:rgba(16,185,129,0.12);border:1px solid "
+                f"rgba(16,185,129,0.4);border-radius:8px;padding:5px 14px;"
+                f"color:#10b981;font-weight:700;font-size:.82rem;white-space:nowrap;'>"
+                f"✅ {icon} {label}</span>")
         elif idx == current_idx:
-            # Active
-            cols[i+1].markdown(
-                f"<div style='background:rgba(14,165,233,0.15);border:2px solid #0ea5e9;"
-                f"border-radius:10px;padding:8px 12px;text-align:center;'>"
-                f"<span style='color:#0ea5e9;font-weight:800;font-size:.85rem;'>▶ {label}</span>"
-                f"</div>", unsafe_allow_html=True)
+            parts.append(
+                f"<span style='background:rgba(14,165,233,0.18);border:2px solid #0ea5e9;"
+                f"border-radius:8px;padding:5px 14px;"
+                f"color:#0ea5e9;font-weight:800;font-size:.82rem;white-space:nowrap;'>"
+                f"▶ {icon} {label}</span>")
         else:
-            # Upcoming
-            cols[i+1].markdown(
-                f"<div style='background:rgba(255,255,255,0.03);border:1px solid #1a2d4a;"
-                f"border-radius:10px;padding:8px 12px;text-align:center;'>"
-                f"<span style='color:#334155;font-weight:400;font-size:.85rem;'>{label}</span>"
-                f"</div>", unsafe_allow_html=True)
-    st.markdown("<hr style='border-color:#1a2d4a;margin:8px 0 16px;'>",
-                unsafe_allow_html=True)
+            parts.append(
+                f"<span style='background:rgba(255,255,255,0.03);border:1px solid #1e293b;"
+                f"border-radius:8px;padding:5px 14px;"
+                f"color:#334155;font-size:.82rem;white-space:nowrap;'>"
+                f"{icon} {label}</span>")
+
+    arrow = "<span style='color:#334155;font-size:.9rem;'>›</span>"
+    nav_html = arrow.join(parts)
+
+    st.markdown(
+        f"<div style='display:flex;align-items:center;gap:6px;flex-wrap:wrap;"
+        f"padding:10px 0 12px;border-bottom:1px solid #1a2d4a;margin-bottom:16px;'>"
+        f"<span style='font-weight:800;color:#0ea5e9;font-size:.9rem;margin-right:6px;'>⚡ 1 Click</span>"
+        f"{nav_html}</div>",
+        unsafe_allow_html=True
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -8333,14 +8337,22 @@ Engine analyses headers + data values to map intelligently</span>
                     continue
                 lbl, _, opts = meta
                 cur = found_work.get(k, NONE_OPT)
-                safe_cur = cur if cur in opts else NONE_OPT
+                # If auto-detected column not in opts (type mismatch),
+                # fall back to all_cols so user can always see and fix it
+                if cur and cur != NONE_OPT and cur not in opts:
+                    opts = all_cols  # widen to all columns
+                safe_cur = cur if (cur and cur in opts) else NONE_OPT
                 # Colour indicator
                 indicator = "🟢" if safe_cur != NONE_OPT else "🔴"
                 with (col_a if i%2==0 else col_b):
+                    try:
+                        idx = opts.index(safe_cur)
+                    except ValueError:
+                        idx = 0
                     chosen = st.selectbox(
                         f"{indicator} {lbl}",
                         opts,
-                        index=opts.index(safe_cur),
+                        index=idx,
                         key=f"p2_map_{k}"
                     )
                     if chosen != NONE_OPT:
