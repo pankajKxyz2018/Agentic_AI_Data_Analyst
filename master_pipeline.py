@@ -7916,47 +7916,43 @@ def render_advanced_dashboard(df, found, domain):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _nav_bar(current_page):
-    """Render the top progress navigation bar."""
-    pages = [
-        ("1", "Login", "landing"),
-        ("2", "Data Prep", "data_prep"),
-        ("3", "Analysis", "analysis"),
+    """Render the top progress navigation bar using st.columns for reliability."""
+    # Step definitions
+    steps = [
+        ("1", "🔐 Login",     "landing"),
+        ("2", "🗃️ Data Prep", "data_prep"),
+        ("3", "📊 Analysis",  "analysis"),
     ]
-    steps_html = ""
-    for num, label, key in pages:
-        if key == current_page:
-            color = "#0ea5e9"
-            bg    = "rgba(14,165,233,0.15)"
-            fw    = "800"
-        elif (key == "data_prep" and current_page == "analysis") or              (key == "landing"   and current_page in ["data_prep","analysis"]):
-            color = "#10b981"
-            bg    = "rgba(16,185,129,0.1)"
-            fw    = "600"
+    ORDER = {"landing": 0, "data_prep": 1, "analysis": 2}
+    current_idx = ORDER.get(current_page, 0)
+
+    cols = st.columns([1, 3, 3, 3, 1])
+    cols[0].markdown("**⚡**")
+    for i, (num, label, key) in enumerate(steps):
+        idx = ORDER[key]
+        if idx < current_idx:
+            # Completed
+            cols[i+1].markdown(
+                f"<div style='background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);"
+                f"border-radius:10px;padding:8px 12px;text-align:center;'>"
+                f"<span style='color:#10b981;font-weight:700;font-size:.85rem;'>✅ {label}</span>"
+                f"</div>", unsafe_allow_html=True)
+        elif idx == current_idx:
+            # Active
+            cols[i+1].markdown(
+                f"<div style='background:rgba(14,165,233,0.15);border:2px solid #0ea5e9;"
+                f"border-radius:10px;padding:8px 12px;text-align:center;'>"
+                f"<span style='color:#0ea5e9;font-weight:800;font-size:.85rem;'>▶ {label}</span>"
+                f"</div>", unsafe_allow_html=True)
         else:
-            color = "#334155"
-            bg    = "rgba(255,255,255,0.03)"
-            fw    = "400"
-        steps_html += f"""
-        <div style="display:flex;align-items:center;gap:8px;padding:8px 18px;
-                    background:{bg};border-radius:10px;">
-            <div style="width:26px;height:26px;border-radius:50%;background:{color};
-                        display:flex;align-items:center;justify-content:center;
-                        font-weight:800;font-size:.8rem;color:#fff;">{num}</div>
-            <span style="color:{color};font-weight:{fw};font-size:.85rem;">{label}</span>
-        </div>"""
-    st.markdown(f"""
-<div style="display:flex;align-items:center;gap:6px;
-            background:#050d1a;border-bottom:1px solid #1a2d4a;
-            padding:10px 24px;margin-bottom:20px;
-            position:sticky;top:0;z-index:999;">
-    <div style="font-weight:800;color:#0ea5e9;font-size:.9rem;margin-right:12px;">
-        ⚡ 1 Click
-    </div>
-    <div style="display:flex;gap:8px;align-items:center;">
-        {steps_html}
-    </div>
-</div>
-""", unsafe_allow_html=True)
+            # Upcoming
+            cols[i+1].markdown(
+                f"<div style='background:rgba(255,255,255,0.03);border:1px solid #1a2d4a;"
+                f"border-radius:10px;padding:8px 12px;text-align:center;'>"
+                f"<span style='color:#334155;font-weight:400;font-size:.85rem;'>{label}</span>"
+                f"</div>", unsafe_allow_html=True)
+    st.markdown("<hr style='border-color:#1a2d4a;margin:8px 0 16px;'>",
+                unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
