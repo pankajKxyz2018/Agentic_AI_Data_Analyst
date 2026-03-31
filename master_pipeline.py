@@ -8279,7 +8279,16 @@ Engine analyses headers + data values to map intelligently</span>
                       "date","customer","region","country"],
         "Generic":   list(KEY_META.keys()),
     }
-    active_keys = DOMAIN_KEYS.get(domain, list(KEY_META.keys()))
+    # Use custom domain keys if user has overridden them
+    _custom_dk = st.session_state.get("custom_domain_keys", {})
+    if domain in _custom_dk:
+        active_keys = _custom_dk[domain]
+    else:
+        active_keys = DOMAIN_KEYS.get(domain, list(KEY_META.keys()))
+    # Always include custom_ keys that user added manually
+    for _ck in found_work:
+        if _ck.startswith("custom_") and _ck not in active_keys:
+            active_keys = list(active_keys) + [_ck]
 
     # Build working found dict (editable copy)
     if "page2_found" not in st.session_state:
@@ -8361,6 +8370,240 @@ Engine analyses headers + data values to map intelligently</span>
                         del found_work[k]
 
         st.session_state["page2_found"] = found_work
+
+    # ── CUSTOM COLUMN MANAGER ────────────────────────────────────────────────
+    with st.expander("🛠️ Custom Column Manager — Add, Remove & Edit Mapping Fields",
+                     expanded=False):
+
+        st.markdown("""
+<div style='background:rgba(249,115,22,0.06);border:1px solid rgba(249,115,22,0.2);
+border-radius:10px;padding:12px 16px;margin-bottom:12px;font-size:.82rem;color:#94a3b8;'>
+<strong style='color:#f97316;'>What you can do here:</strong><br>
+✅ <strong>Add</strong> a new custom mapping field (e.g. "Invoice No", "Branch Code")<br>
+✅ <strong>Remove</strong> any existing mapped field from the active mapping<br>
+✅ <strong>Edit</strong> which dataset column any field points to<br>
+✅ <strong>Add/remove dropdown options</strong> for any field
+</div>
+""", unsafe_allow_html=True)
+
+        # ── Section 1: Add a new custom field ────────────────────────────────
+        st.markdown("**➕ Add a New Custom Mapping Field**")
+        col_new1, col_new2, col_new3 = st.columns([2, 2, 1])
+        with col_new1:
+            new_key_label = st.text_input(
+                "Field name (e.g. Invoice No, Branch Code)",
+                placeholder="My Custom Field",
+                key="cm_new_label"
+            )
+        with col_new2:
+            new_key_col = st.selectbox(
+                "Map it to this dataset column",
+                ["— select column —"] + list(df_clean.columns),
+                key="cm_new_col"
+            )
+        with col_new3:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            if st.button("➕ Add Field", key="cm_add_btn", use_container_width=True):
+                if new_key_label.strip() and new_key_col != "— select column —":
+                    # Create a safe key from the label
+                    safe_key = "custom_" + new_key_label.strip().lower()                        .replace(" ","_").replace("-","_")[:30]
+                    found_work[safe_key] = new_key_col
+                    # Also store custom labels so they display correctly
+                    if "custom_labels" not in st.session_state:
+                        st.session_state["custom_labels"] = {}
+                    st.session_state["custom_labels"][safe_key] = new_key_label.strip()
+                    st.session_state["page2_found"] = found_work
+                    st.success(f"✅ Added: **{new_key_label}** → `{new_key_col}`")
+                    st.rerun()
+                else:
+                    st.warning("Please enter a field name and select a column.")
+
+        st.markdown("---")
+
+        # ── Section 2: Manage existing mapped fields ──────────────────────────
+        st.markdown("**📋 All Currently Mapped Fields — Edit or Remove**")
+        if not found_work:
+            st.info("No fields mapped yet. Auto-mapping will populate this list.")
+        else:
+            custom_labels = st.session_state.get("custom_labels", {})
+            keys_to_remove = []
+
+            # Build KEY_META labels for display
+            KEY_DISPLAY = {
+                "sales":"Revenue / Sales Amount","profit":"Profit / Margin",
+                "quantity":"Quantity / Units","discount":"Discount",
+                "price":"Unit Price / MRP","cost":"Unit Cost / COGS",
+                "target":"Target / Budget","date":"Date / Time",
+                "product":"Product / Item","category":"Category",
+                "sub_category":"Sub-Category","region":"Region / Territory",
+                "city":"City","state":"State / Province","country":"Country",
+                "customer":"Customer / Client","segment":"Customer Segment",
+                "order_id":"Order ID / Invoice","salary":"Salary / CTC",
+                "department":"Department","job_title":"Job Title",
+                "employee_id":"Employee ID","employee_name":"Employee Name",
+                "gender":"Gender","age":"Age","age_group":"Age Group",
+                "tenure":"Tenure / Experience","attrition":"Attrition / Left",
+                "hire_date":"Hire Date","performance":"Performance Rating",
+                "education":"Education Level","marital":"Marital Status",
+                "spend":"Ad Spend","impressions":"Impressions / Views",
+                "clicks":"Clicks","conversions":"Conversions / Leads",
+                "roi":"ROI / ROAS","ctr":"CTR","channel":"Marketing Channel",
+                "campaign_id":"Campaign Name","demography":"Demography",
+                "store":"Store / Branch","payment":"Payment Method",
+                "delivery":"Delivery Time","returns":"Returns / Refunds",
+                "satisfaction":"Satisfaction / NPS","loyalty_points":"Loyalty Points",
+                "device":"Device / Platform","return_reason":"Return Reason",
+                "shipping_country":"Shipping Country","fraud_label":"Fraud Label",
+                "fraud_amount":"Transaction Amount","fraud_time":"Transaction Time",
+                "fraud_type":"Transaction Type","fraud_id":"Transaction ID",
+                "fraud_channel":"Fraud Channel","fraud_loc":"Fraud Location",
+                "fraud_score":"Risk Score","balance":"Account Balance",
+                "latitude":"Latitude","longitude":"Longitude",
+                "work_location":"Work Location","notice_period":"Notice Period",
+                "overtime":"Overtime","training":"Training Hours",
+                "leave_days":"Leave Days",
+            }
+
+            # Display in a table-like layout — 1 row per mapped field
+            for i, (k, v) in enumerate(list(found_work.items())):
+                display_label = custom_labels.get(k) or KEY_DISPLAY.get(k) or                                 k.replace("_"," ").title()
+                is_custom = k.startswith("custom_")
+
+                c1, c2, c3, c4 = st.columns([3, 3, 1, 1])
+                with c1:
+                    st.markdown(
+                        f"<div style='padding:6px 0;font-size:.83rem;"
+                        f"color:{"#f97316" if is_custom else "#94a3b8"}'>"
+                        f"{'🔧' if is_custom else '📌'} {display_label}"
+                        f"{'  <span style="font-size:.7rem;color:#475569;">(custom)</span>' if is_custom else ''}"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+                with c2:
+                    # Edit dropdown — all columns available
+                    all_opts = ["— not mapped —"] + list(df_clean.columns)
+                    cur_v    = v if v in all_opts else "— not mapped —"
+                    new_v    = st.selectbox(
+                        "Column",
+                        all_opts,
+                        index=all_opts.index(cur_v),
+                        key=f"cm_edit_{k}_{i}",
+                        label_visibility="collapsed"
+                    )
+                    if new_v != "— not mapped —":
+                        found_work[k] = new_v
+                    elif k in found_work:
+                        found_work[k] = None
+                with c3:
+                    # Rename (for custom fields only)
+                    if is_custom:
+                        new_label = st.text_input(
+                            "Rename",
+                            value=display_label,
+                            key=f"cm_rename_{k}_{i}",
+                            label_visibility="collapsed"
+                        )
+                        if new_label.strip() and new_label.strip() != display_label:
+                            if "custom_labels" not in st.session_state:
+                                st.session_state["custom_labels"] = {}
+                            st.session_state["custom_labels"][k] = new_label.strip()
+                    else:
+                        st.markdown("")
+                with c4:
+                    if st.button("🗑️", key=f"cm_del_{k}_{i}",
+                                 help=f"Remove {display_label} from mapping"):
+                        keys_to_remove.append(k)
+
+            # Apply removals
+            if keys_to_remove:
+                for k in keys_to_remove:
+                    if k in found_work:
+                        del found_work[k]
+                    if "custom_labels" in st.session_state:
+                        st.session_state["custom_labels"].pop(k, None)
+                st.session_state["page2_found"] = found_work
+                st.rerun()
+
+            # Clean up None values
+            found_work = {k:v for k,v in found_work.items() if v}
+            st.session_state["page2_found"] = found_work
+
+        st.markdown("---")
+
+        # ── Section 3: Bulk domain dropdown editor ────────────────────────────
+        st.markdown("**🎯 Edit Domain Key Sets — Add or Remove Fields for Any Domain**")
+        st.caption("These changes affect which fields are shown in the mapping table above.")
+
+        if "custom_domain_keys" not in st.session_state:
+            st.session_state["custom_domain_keys"] = {}
+
+        edit_domain = st.selectbox(
+            "Select domain to customise:",
+            ["Sales","Marketing","HR","Ecommerce","Retail","Fraud","Generic"],
+            key="cm_domain_editor"
+        )
+
+        # Current keys for this domain
+        base_domain_keys = {
+            "Sales":     ["sales","profit","quantity","discount","price","cost","target",
+                          "date","product","category","sub_category","region","city",
+                          "state","country","customer","segment","order_id"],
+            "Marketing": ["spend","impressions","clicks","conversions","channel",
+                          "campaign_id","date","region","country","segment"],
+            "HR":        ["salary","department","job_title","employee_id","employee_name",
+                          "gender","age","tenure","attrition","hire_date","performance",
+                          "date","region","country"],
+            "Ecommerce": ["sales","quantity","discount","price","date","product","category",
+                          "customer","segment","order_id","payment","delivery","returns",
+                          "satisfaction","region","country","city"],
+            "Retail":    ["sales","quantity","discount","price","date","product","category",
+                          "store","payment","region","city","state","customer","satisfaction"],
+            "Fraud":     ["fraud_label","fraud_amount","fraud_time","fraud_type",
+                          "date","customer","region","country"],
+            "Generic":   list(KEY_DISPLAY.keys()),
+        }
+
+        current_keys = list(st.session_state["custom_domain_keys"].get(
+            edit_domain, base_domain_keys.get(edit_domain, [])))
+
+        col_dk1, col_dk2 = st.columns(2)
+        with col_dk1:
+            st.markdown(f"**Currently active for {edit_domain}:** ({len(current_keys)} fields)")
+            for ki, k in enumerate(current_keys):
+                lbl = KEY_DISPLAY.get(k, k.replace("_"," ").title())
+                c_a, c_b = st.columns([5,1])
+                c_a.markdown(f"<span style='font-size:.8rem;color:#94a3b8;'>📌 {lbl}</span>",
+                             unsafe_allow_html=True)
+                if c_b.button("✕", key=f"dk_rem_{edit_domain}_{k}_{ki}",
+                              help=f"Remove {lbl}"):
+                    current_keys.remove(k)
+                    st.session_state["custom_domain_keys"][edit_domain] = current_keys
+                    st.rerun()
+
+        with col_dk2:
+            st.markdown("**Add a field to this domain:**")
+            all_possible_keys = list(KEY_DISPLAY.keys())
+            addable = [k for k in all_possible_keys if k not in current_keys]
+            if addable:
+                to_add = st.selectbox(
+                    "Field to add:",
+                    ["— select —"] + [f"{k} ({KEY_DISPLAY.get(k,k)})" for k in addable],
+                    key=f"dk_add_sel_{edit_domain}"
+                )
+                if st.button("➕ Add to domain", key=f"dk_add_btn_{edit_domain}",
+                             use_container_width=True):
+                    if to_add != "— select —":
+                        key_to_add = to_add.split(" (")[0]
+                        current_keys.append(key_to_add)
+                        st.session_state["custom_domain_keys"][edit_domain] = current_keys
+                        st.rerun()
+            else:
+                st.info("All available fields are already in this domain.")
+
+            if st.button("↺ Reset to default", key=f"dk_reset_{edit_domain}"):
+                if edit_domain in st.session_state["custom_domain_keys"]:
+                    del st.session_state["custom_domain_keys"][edit_domain]
+                st.rerun()
 
     # Voice assistant for column mapping
     if (not AUTH_ENABLED) or check_plan_limit("voice"):
