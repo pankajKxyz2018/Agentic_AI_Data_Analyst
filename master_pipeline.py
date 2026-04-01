@@ -8004,6 +8004,15 @@ def render_page2_data_prep():
     Step 4 — Autonomous Column Mapping
     Step 5 — Final Preview + Confirm
     """
+    # ── Safety: initialise ALL session state keys before anything else ──────
+    if "page2_found"        not in st.session_state: st.session_state["page2_found"]        = {}
+    if "custom_labels"      not in st.session_state: st.session_state["custom_labels"]      = {}
+    if "custom_domain_keys" not in st.session_state: st.session_state["custom_domain_keys"] = {}
+    if "_mapping_warnings"  not in st.session_state: st.session_state["_mapping_warnings"]  = []
+    # Ensure page2_found is always a dict, never None
+    if not isinstance(st.session_state.get("page2_found"), dict):
+        st.session_state["page2_found"] = {}
+    # ────────────────────────────────────────────────────────────────────────
     _nav_bar("data_prep")
 
     # ── Sidebar ──────────────────────────────────────────────────────────────
@@ -8279,6 +8288,11 @@ Engine analyses headers + data values to map intelligently</span>
                       "date","customer","region","country"],
         "Generic":   list(KEY_META.keys()),
     }
+    # Build working found dict (editable copy) — MUST be before active_keys loop
+    if "page2_found" not in st.session_state:
+        st.session_state["page2_found"] = dict(found_auto)
+    found_work = st.session_state.get("page2_found") or dict(found_auto)
+
     # Use custom domain keys if user has overridden them
     _custom_dk = st.session_state.get("custom_domain_keys", {})
     if domain in _custom_dk:
@@ -8286,14 +8300,9 @@ Engine analyses headers + data values to map intelligently</span>
     else:
         active_keys = DOMAIN_KEYS.get(domain, list(KEY_META.keys()))
     # Always include custom_ keys that user added manually
-    for _ck in found_work:
+    for _ck in list(found_work.keys()):
         if _ck.startswith("custom_") and _ck not in active_keys:
             active_keys = list(active_keys) + [_ck]
-
-    # Build working found dict (editable copy)
-    if "page2_found" not in st.session_state:
-        st.session_state["page2_found"] = dict(found_auto)
-    found_work = st.session_state["page2_found"]
 
     # Mapping summary table
     mapped_keys   = [k for k in active_keys if k in found_work and found_work[k]]
