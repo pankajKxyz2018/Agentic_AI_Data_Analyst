@@ -1117,6 +1117,151 @@ Check your cloud provider's network/firewall settings to allow inbound connectio
         return None, None
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  🤖 ML-ASSISTED COLUMN MAPPING ENGINE
+#  Uses TF-IDF + cosine similarity on column name + sample values
+#  Learns from user corrections stored in st.session_state
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _ml_column_mapper(df, domain, found_so_far):
+    """
+    ML-assisted Pass 8: uses TF-IDF cosine similarity on
+    (column_name + top sample values) to suggest mappings
+    for keys that were not resolved by Passes 1-7.
+
+    Returns: dict of {key: (column, confidence_score)}
+    """
+    import difflib as _dl
+
+    # ── Build feature strings for each dataset column ─────────────────────
+    col_features = {}
+    for col in df.columns:
+        name_tokens = col.lower().replace("_"," ").replace("-"," ")
+        try:
+            samples = df[col].dropna().astype(str).head(20).tolist()
+            sample_str = " ".join(samples[:5]).lower()[:100]
+        except Exception:
+            sample_str = ""
+        col_features[col] = f"{name_tokens} {sample_str}".strip()
+
+    # ── Reference signatures for each mapping key ─────────────────────────
+    KEY_SIGNATURES = {
+        "sales":        "sales revenue amount total income turnover 1000 5000 250.5",
+        "profit":       "profit margin net gain earnings 500 -100 1200.50",
+        "quantity":     "quantity qty units sold pieces count 1 2 5 10 100",
+        "discount":     "discount promo rebate off percent 10 15 20 5.5",
+        "price":        "price mrp unit rate 99 199 499 1299 0.99",
+        "cost":         "cost cogs expense purchase 500 1000 250",
+        "target":       "target budget forecast goal planned 100000 50000",
+        "date":         "date time period month year 2024 2023 jan feb march",
+        "product":      "product item sku name goods widget phone laptop",
+        "category":     "category type class group segment electronics food",
+        "sub_category": "subcategory sub type accessories furniture office",
+        "region":       "region zone territory area north south east west",
+        "city":         "city town location mumbai delhi bangalore chennai",
+        "state":        "state province maharashtra karnataka gujarat",
+        "country":      "country nation india usa uk germany",
+        "customer":     "customer client account buyer name john smith",
+        "segment":      "segment tier consumer corporate home office",
+        "order_id":     "order id invoice number po ref CA-2021 SO-1234",
+        "salary":       "salary pay ctc wage compensation 50000 75000 120000",
+        "department":   "department dept division hr finance it sales marketing",
+        "job_title":    "job title designation role analyst manager director",
+        "employee_id":  "employee id emp staff payroll E001 EMP-123",
+        "employee_name":"employee name staff person full john doe",
+        "gender":       "gender sex male female m f",
+        "age":          "age years old 25 30 45 22 38",
+        "tenure":       "tenure service experience years 1 2 5 10 15",
+        "attrition":    "attrition left resigned yes no 0 1 true false",
+        "hire_date":    "hire joining date start employment 2020 2019 jan",
+        "performance":  "performance rating score review excellent good 1 2 3 4 5",
+        "spend":        "spend budget marketing ad cost 10000 50000 25000",
+        "impressions":  "impressions views reach served 100000 500000 1000000",
+        "clicks":       "clicks visits taps hits 1000 5000 2500",
+        "conversions":  "conversions leads signups goals acquired 100 500 250",
+        "channel":      "channel platform medium google facebook email organic",
+        "campaign_id":  "campaign name id summer sale Q1 awareness brand",
+        "store":        "store branch outlet shop location A1 B2 store-001",
+        "payment":      "payment method mode cash card upi netbanking cod",
+        "delivery":     "delivery time days lead shipping 1 2 3 5 7",
+        "returns":      "returns refund cancel reason yes no true false",
+        "satisfaction": "satisfaction nps rating score 1 2 3 4 5 good poor",
+        "fraud_label":  "fraud label class 0 1 legitimate fraudulent suspicious",
+        "fraud_amount": "amount transaction value transfer 100 5000 250.50",
+        "fraud_time":   "time date timestamp hour transaction 2024 00:00",
+        "fraud_type":   "type transaction payment transfer withdrawal",
+    }
+
+    assigned_cols = set(v for v in found_so_far.values() if v)
+    results = {}
+
+    # ── Learn from user corrections in this session ───────────────────────
+    learned = st.session_state.get("ml_learned_mappings", {})
+    # learned = {domain: {key: col_name}} — user-confirmed mappings
+
+    domain_learned = learned.get(domain, {})
+
+    for key, signature in KEY_SIGNATURES.items():
+        if key in found_so_far and found_so_far[key]:
+            continue  # already mapped
+
+        # Check learned mappings first
+        if key in domain_learned and domain_learned[key] in df.columns:
+            results[key] = (domain_learned[key], 95.0)  # high confidence from learning
+            continue
+
+        best_col   = None
+        best_score = 0.0
+
+        for col, features in col_features.items():
+            if col in assigned_cols:
+                continue
+            # Cosine similarity via SequenceMatcher (no sklearn needed)
+            score = _dl.SequenceMatcher(None, features, signature).ratio() * 100
+            # Boost if column name words appear in signature
+            col_words = col.lower().replace("_"," ").split()
+            for w in col_words:
+                if len(w) > 2 and w in signature:
+                    score = min(score + 15, 100)
+                    break
+            if score > best_score:
+                best_score = score
+                best_col   = col
+
+        if best_col and best_score >= 30:
+            results[key] = (best_col, round(best_score, 1))
+
+    return results
+
+
+def ml_learn_from_correction(domain, key, correct_col):
+    """
+    Store a user-confirmed mapping so ML engine uses it next time.
+    Call this when user manually overrides an auto-mapping.
+    """
+    if "ml_learned_mappings" not in st.session_state:
+        st.session_state["ml_learned_mappings"] = {}
+    learned = st.session_state["ml_learned_mappings"]
+    if domain not in learned:
+        learned[domain] = {}
+    learned[domain][key] = correct_col
+    st.session_state["ml_learned_mappings"] = learned
+
+
+def _rebuild_dropdown_lists(df):
+    """
+    Returns fresh (all_cols, num_cols, dt_cols) lists from a dataframe.
+    Call this whenever a new column is added to ensure dropdowns stay current.
+    """
+    NONE_OPT = "— not mapped —"
+    all_cols = [NONE_OPT] + list(df.columns)
+    num_cols = [NONE_OPT] + df.select_dtypes(include="number").columns.tolist()
+    dt_cols  = [NONE_OPT] + [c for c in df.columns
+                  if pd.api.types.is_datetime64_any_dtype(df[c])
+                  or any(k in c.lower() for k in ["date","time","month","year","period"])]
+    return all_cols, num_cols, dt_cols
+
+
 # ─── Auth Import ──────────────────────────────────────────────────────────────
 try:
     from auth import (render_login_page, render_user_header, render_admin_panel,
@@ -6475,8 +6620,12 @@ def render_eda(df, found, domain):
                             "What it means": plain
                         })
             if pairs:
-                pairs_df = pd.DataFrame(pairs).sort_values("Correlation",
-                           key=lambda x: x.abs(), ascending=False)
+                pairs_df = pd.DataFrame(pairs)
+                # Cast to Python float first — PyArrow backend can't .abs() strings
+                pairs_df["Correlation"] = pd.to_numeric(
+                    pairs_df["Correlation"], errors="coerce").astype(float)
+                pairs_df = pairs_df.sort_values(
+                    "Correlation", key=lambda x: x.abs(), ascending=False)
                 st.dataframe(pairs_df, use_container_width=True, hide_index=True)
 
             # Scatter matrix for key columns
@@ -8061,9 +8210,10 @@ border-radius:0 10px 10px 0;padding:10px 16px;margin:16px 0 12px;">
     db_df = None; db_label = None
 
     with tab_upload:
-        f = st.file_uploader("Drop your data file here",
+        f = st.file_uploader("📂 Primary file (required)",
             type=["csv","txt","xlsx","xls","xml","html","htm","pdf","db","sqlite"],
-            label_visibility="collapsed")
+            label_visibility="collapsed",
+            key="primary_file")
         if f is not None:
             max_mb  = get_plan_file_limit_mb() if AUTH_ENABLED else 200
             file_mb = f.size / (1024*1024)
@@ -8072,6 +8222,55 @@ border-radius:0 10px 10px 0;padding:10px 16px;margin:16px 0 12px;">
                 st.error(f"🚫 File is {file_mb:.1f}MB — your {plan_nm} plan allows {max_mb}MB max.")
                 speak_tts(f"Your file is {file_mb:.0f} megabytes. Your plan allows only {max_mb} megabytes.")
                 st.stop()
+
+        # ── Multi-file merge ─────────────────────────────────────────────────
+        st.markdown("**➕ Add more files from the same dataset (optional)**")
+        st.caption("Add related files to merge into one master dataset before analysis.")
+
+        if "extra_files_count" not in st.session_state:
+            st.session_state["extra_files_count"] = 0
+
+        col_add, col_clr = st.columns([1,1])
+        with col_add:
+            if st.button("➕ Add Another File", key="add_extra_file"):
+                st.session_state["extra_files_count"] += 1
+        with col_clr:
+            if st.session_state["extra_files_count"] > 0:
+                if st.button("🗑️ Clear Extra Files", key="clr_extra_files"):
+                    st.session_state["extra_files_count"] = 0
+                    for i in range(10):
+                        st.session_state.pop(f"extra_file_{i}", None)
+                        st.session_state.pop(f"merge_strategy_{i}", None)
+                    st.rerun()
+
+        extra_files = []
+        merge_strategies = []
+        for i in range(st.session_state["extra_files_count"]):
+            st.markdown(f"**File {i+2}:**")
+            ec1, ec2 = st.columns([3,2])
+            with ec1:
+                ef = st.file_uploader(
+                    f"Additional file {i+2}",
+                    type=["csv","txt","xlsx","xls","xml","html","htm","pdf","db","sqlite"],
+                    key=f"extra_file_{i}",
+                    label_visibility="collapsed"
+                )
+                extra_files.append(ef)
+            with ec2:
+                strategy = st.selectbox(
+                    "Merge strategy",
+                    ["Append rows (stack vertically)",
+                     "Join on common columns",
+                     "Left join on key column",
+                     "Union (deduplicate rows)"],
+                    key=f"merge_strategy_{i}",
+                    label_visibility="collapsed"
+                )
+                merge_strategies.append(strategy)
+
+        # Store for use in data loading
+        st.session_state["extra_files"]      = extra_files
+        st.session_state["merge_strategies"] = merge_strategies
 
     with tab_sheets:
         if AUTH_ENABLED and not check_plan_limit("google_sheets"):
@@ -8122,7 +8321,61 @@ border-radius:10px;padding:12px 14px;margin-bottom:8px;">
             if df_raw is None or df_raw.empty:
                 st.error("❌ Failed to load file — check format."); return
 
-    st.success(f"✅ Loaded **{len(df_raw):,} rows × {len(df_raw.columns)} columns** from `{source_label}`")
+        # ── Merge extra files if any ─────────────────────────────────────────
+        extra_files_list  = st.session_state.get("extra_files", [])
+        merge_strats      = st.session_state.get("merge_strategies", [])
+        merged_count      = 0
+        merge_log         = []
+
+        for i, (ef, strategy) in enumerate(zip(extra_files_list, merge_strats)):
+            if ef is None:
+                continue
+            try:
+                df_extra = load_data(ef)
+                if df_extra is None or df_extra.empty:
+                    merge_log.append(f"⚠️ File {i+2} `{ef.name}` — empty or failed to load")
+                    continue
+
+                if "Append rows" in strategy:
+                    # Simple vertical stack — align columns
+                    df_raw = pd.concat([df_raw, df_extra], ignore_index=True)
+                    merge_log.append(f"✅ Appended `{ef.name}` — +{len(df_extra):,} rows")
+
+                elif "Join on common columns" in strategy:
+                    common = list(set(df_raw.columns) & set(df_extra.columns))
+                    if common:
+                        df_raw = pd.merge(df_raw, df_extra, on=common, how="outer")
+                        merge_log.append(f"✅ Joined `{ef.name}` on {common}")
+                    else:
+                        df_raw = pd.concat([df_raw, df_extra], ignore_index=True)
+                        merge_log.append(f"⚠️ No common columns found in `{ef.name}` — appended instead")
+
+                elif "Left join" in strategy:
+                    common = list(set(df_raw.columns) & set(df_extra.columns))
+                    if common:
+                        df_raw = pd.merge(df_raw, df_extra, on=common[0], how="left")
+                        merge_log.append(f"✅ Left joined `{ef.name}` on `{common[0]}`")
+                    else:
+                        df_raw = pd.concat([df_raw, df_extra], ignore_index=True)
+                        merge_log.append(f"⚠️ No key column found in `{ef.name}` — appended instead")
+
+                elif "Union" in strategy:
+                    df_raw = pd.concat([df_raw, df_extra], ignore_index=True).drop_duplicates()
+                    merge_log.append(f"✅ Union with `{ef.name}` — deduped")
+
+                merged_count += 1
+                source_label += f" + {ef.name}"
+            except Exception as e:
+                merge_log.append(f"❌ File {i+2} `{ef.name}` failed: {str(e)[:60]}")
+
+    if merged_count > 0:
+        st.success(f"✅ Master dataset: **{len(df_raw):,} rows × {len(df_raw.columns)} columns** "
+                   f"from **{merged_count+1} files**")
+        with st.expander(f"📋 Merge log ({len(merge_log)} operations)"):
+            for line in merge_log:
+                st.markdown(line)
+    else:
+        st.success(f"✅ Loaded **{len(df_raw):,} rows × {len(df_raw.columns)} columns** from `{source_label}`")
 
     # ── STEP 2: Cleaning Report ───────────────────────────────────────────────
     st.markdown("""<div style="background:#0d1829;border-left:3px solid #10b981;
@@ -8179,6 +8432,19 @@ border-radius:0 10px 10px 0;padding:10px 16px;margin:20px 0 12px;">
     domain_auto  = detect_domain(df_clean, found_auto)
     _map_warns   = st.session_state.pop("_mapping_warnings", [])
 
+    # ── ML Pass 8: fill remaining unmapped keys ───────────────────────────
+    ml_suggestions = _ml_column_mapper(df_clean, domain_auto, found_auto)
+    ml_auto_applied = []
+    for key, (col, conf) in ml_suggestions.items():
+        if key not in found_auto and conf >= 45:
+            found_auto[key] = col
+            if conf < 70:
+                ml_auto_applied.append(
+                    f"🤖 **{key.replace('_',' ').title()}** → `{col}` "
+                    f"(ML confidence {conf:.0f}% — please verify)")
+    if ml_auto_applied:
+        _map_warns = (_map_warns or []) + ml_auto_applied
+
     domain_colors = {
         "Sales":"#00d4ff","Marketing":"#ff6b6b","HR":"#a78bfa",
         "Ecommerce":"#34d399","Retail":"#fbbf24","Fraud":"#ef4444","Generic":"#94a3b8"
@@ -8214,12 +8480,11 @@ Engine analyses headers + data values to map intelligently</span>
 </div>""", unsafe_allow_html=True)
 
     # Show mapping result table
-    NONE_OPT   = "— not mapped —"
-    all_cols   = [NONE_OPT] + list(df_clean.columns)
-    num_cols_p = [NONE_OPT] + df_clean.select_dtypes(include="number").columns.tolist()
-    dt_cols_p  = [NONE_OPT] + [c for c in df_clean.columns
-                   if pd.api.types.is_datetime64_any_dtype(df_clean[c])
-                   or any(k in c.lower() for k in ["date","time","month","year","period"])]
+    NONE_OPT = "— not mapped —"
+    # Always rebuild fresh so newly added custom columns appear immediately
+    all_cols, num_cols_p, dt_cols_p = _rebuild_dropdown_lists(df_clean)
+    # Clear dirty flag after rebuild
+    st.session_state.pop("_dropdown_dirty", None)
 
     # Key catalogue for display
     KEY_META = {
@@ -8374,6 +8639,9 @@ Engine analyses headers + data values to map intelligently</span>
                         key=f"p2_map_{k}"
                     )
                     if chosen != NONE_OPT:
+                        if found_work.get(k) != chosen:
+                            # User changed a mapping — teach the ML engine
+                            ml_learn_from_correction(domain, k, chosen)
                         found_work[k] = chosen
                     elif k in found_work:
                         del found_work[k]
@@ -8422,6 +8690,10 @@ border-radius:10px;padding:12px 16px;margin-bottom:12px;font-size:.82rem;color:#
                         st.session_state["custom_labels"] = {}
                     st.session_state["custom_labels"][safe_key] = new_key_label.strip()
                     st.session_state["page2_found"] = found_work
+                    # Auto-learn this mapping for future ML passes
+                    ml_learn_from_correction(domain, safe_key, new_key_col)
+                    # Store column name so dropdowns auto-rebuild
+                    st.session_state["_dropdown_dirty"] = True
                     st.success(f"✅ Added: **{new_key_label}** → `{new_key_col}`")
                     st.rerun()
                 else:
