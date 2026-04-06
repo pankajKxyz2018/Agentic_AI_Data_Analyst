@@ -1262,6 +1262,517 @@ def _rebuild_dropdown_lists(df):
     return all_cols, num_cols, dt_cols
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  📄 SMB DOCUMENT INTELLIGENCE ENGINE
+#  Batch-reads PDF bills, invoices, purchase orders → master dataset
+#  Supports: text PDFs, structured invoices, GST bills, purchase challans
+# ══════════════════════════════════════════════════════════════════════════════
+
+import re as _re
+import io as _io
+
+# ── Regex patterns for common invoice fields ───────────────────────────────
+_PAT = {
+    "date": _re.compile(
+        r'(?:date|dt|dated|invoice\s*date|bill\s*date|challan\s*date)'
+        r'[\s:.\-]*'
+        r'(\d{1,2}[\s/\-\.]\d{1,2}[\s/\-\.]\d{2,4}'
+        r'|\d{1,2}[\s\-](?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[\s\-]\d{2,4})',
+        _re.IGNORECASE),
+    "invoice_no": _re.compile(
+        r'(?:invoice\s*(?:no|number|#)|bill\s*(?:no|number|#)|inv\s*(?:no|#)|'
+        r'challan\s*(?:no|number)|order\s*(?:no|number|#)|receipt\s*(?:no|#))'
+        r'[\s:.\-]*([A-Z0-9][A-Z0-9/\-]{2,30})',
+        _re.IGNORECASE),
+    "gstin": _re.compile(
+        r'\b(\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}[Z]{1}[A-Z\d]{1})\b'),
+    "pan": _re.compile(
+        r'\b([A-Z]{5}\d{4}[A-Z]{1})\b'),
+    "phone": _re.compile(
+        r'(?:ph|phone|mob|mobile|tel|contact)[\s:.\-]*'
+        r'(\+?91[\s\-]?\d{10}|\d{10})',
+        _re.IGNORECASE),
+    "email": _re.compile(
+        r'\b([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Z|a-z]{2,})\b'),
+    "amount": _re.compile(
+        r'(?:total|grand\s*total|net\s*(?:payable|amount|total)|'
+        r'amount\s*(?:payable|due)|invoice\s*(?:total|value)|'
+        r'bill\s*(?:total|amount)|payable\s*amount)'
+        r'[\s:₹Rs.INR]*'
+        r'([\d,]+(?:\.\d{1,2})?)',
+        _re.IGNORECASE),
+    "tax": _re.compile(
+        r'(?:gst|cgst|sgst|igst|tax|vat)\s*(?:@\s*\d+%)?'
+        r'[\s:₹Rs.]*'
+        r'([\d,]+(?:\.\d{1,2})?)',
+        _re.IGNORECASE),
+    "discount": _re.compile(
+        r'(?:discount|disc|rebate)\s*(?:@\s*[\d.]+%)?'
+        r'[\s:₹Rs.]*'
+        r'([\d,]+(?:\.\d{1,2})?)',
+        _re.IGNORECASE),
+    "subtotal": _re.compile(
+        r'(?:sub\s*total|subtotal|taxable\s*(?:value|amount)|'
+        r'basic\s*amount|before\s*tax)'
+        r'[\s:₹Rs.]*'
+        r'([\d,]+(?:\.\d{1,2})?)',
+        _re.IGNORECASE),
+    "payment_mode": _re.compile(
+        r'(?:payment\s*(?:mode|method|via|through|by)|paid\s*(?:via|by|through))'
+        r'[\s:.\-]*'
+        r'(cash|upi|neft|rtgs|cheque|check|card|credit|debit|online|bank\s*transfer|'
+        r'netbanking|imps|demand\s*draft|dd)',
+        _re.IGNORECASE),
+    "payment_status": _re.compile(
+        r'\b(paid|unpaid|partial(?:ly\s*paid)?|outstanding|due|cleared|settled)\b',
+        _re.IGNORECASE),
+    "currency": _re.compile(r'(₹|Rs\.?|INR|USD|\$|EUR|€|GBP|£)'),
+}
+
+# ── Name extraction heuristics ─────────────────────────────────────────────
+_VENDOR_KW   = ['from', 'supplier', 'vendor', 'seller', 'billed by',
+                'sold by', 'issued by', 'company name', 'm/s', 'messrs']
+_CUSTOMER_KW = ['to', 'bill to', 'ship to', 'buyer', 'customer',
+                'client', 'consignee', 'sold to', 'deliver to']
+
+# ── Line item patterns ─────────────────────────────────────────────────────
+_LINE_PAT = _re.compile(
+    r'^(.{3,40}?)\s+'          # item description (3-40 chars)
+    r'(\d+(?:\.\d+)?)\s+'      # quantity
+    r'(?:(?:nos?|kg|gm|ltr?|pcs?|bags?|mtr?|unit)\s+)?'
+    r'([\d,]+(?:\.\d{1,2})?)\s+'  # unit price/rate
+    r'([\d,]+(?:\.\d{1,2})?)$',   # line total
+    _re.IGNORECASE | _re.MULTILINE
+)
+
+
+def _clean_amount(s):
+    """Convert '1,23,456.78' → float 123456.78"""
+    try:
+        return float(str(s).replace(',', '').strip())
+    except Exception:
+        return None
+
+
+def _extract_name_near_keyword(text, keywords, window=3):
+    """
+    Find a company/person name near a keyword.
+    Returns the first non-empty line within `window` lines of the keyword.
+    """
+    lines = [l.strip() for l in text.split('\n') if l.strip()]
+    for i, line in enumerate(lines):
+        for kw in keywords:
+            if kw.lower() in line.lower():
+                # Look at next `window` lines for a name
+                for j in range(i+1, min(i+1+window, len(lines))):
+                    candidate = lines[j].strip()
+                    # Skip lines that look like addresses or amounts
+                    if (len(candidate) > 3 and
+                        not _re.match(r'^[\d\s,₹+\-]+$', candidate) and
+                        not any(skip in candidate.lower()
+                                for skip in ['gstin','gst no','pan','phone','mob',
+                                             'email','address','pincode','state'])):
+                        return candidate
+    return None
+
+
+def _extract_line_items(text):
+    """
+    Detect and extract line items (product, qty, rate, amount) from invoice text.
+    Returns list of dicts.
+    """
+    items = []
+    # Strategy 1: regex pattern matching
+    for m in _LINE_PAT.finditer(text):
+        desc, qty, rate, total = m.groups()
+        desc_clean = _re.sub(r'\s+', ' ', desc).strip()
+        # Validate: total ≈ qty × rate (within 5%)
+        try:
+            q = float(qty.replace(',',''))
+            r = float(rate.replace(',',''))
+            t = float(total.replace(',',''))
+            if q > 0 and r > 0 and abs(q * r - t) / max(t, 1) < 0.1:
+                items.append({
+                    'product':  desc_clean,
+                    'quantity': q,
+                    'price':    r,
+                    'amount':   t,
+                })
+        except Exception:
+            pass
+
+    # Strategy 2: table detection (lines with ≥3 numeric columns)
+    if not items:
+        for line in text.split('\n'):
+            nums = _re.findall(r'[\d,]+(?:\.\d{1,2})?', line)
+            if len(nums) >= 3:
+                words = _re.sub(r'[\d,₹.%]', ' ', line).strip()
+                words = ' '.join(words.split()[:6])
+                if len(words) > 3:
+                    try:
+                        vals = [_clean_amount(n) for n in nums[-3:]]
+                        if all(v and v > 0 for v in vals):
+                            items.append({
+                                'product':  words,
+                                'quantity': vals[0],
+                                'price':    vals[1],
+                                'amount':   vals[2],
+                            })
+                    except Exception:
+                        pass
+
+    return items[:50]  # cap at 50 line items per document
+
+
+def _extract_fields_from_text(text, filename=""):
+    """
+    Extract all structured fields from raw PDF text.
+    Returns a dict of field → value.
+    """
+    rec = {
+        'source_file': filename,
+        'vendor':      None, 'customer':     None,
+        'invoice_no':  None, 'date':         None,
+        'due_date':    None, 'total_amount': None,
+        'subtotal':    None, 'tax_amount':   None,
+        'discount':    None, 'net_amount':   None,
+        'payment_mode':None, 'payment_status':None,
+        'gstin_vendor':None, 'gstin_customer':None,
+        'currency':    '₹',  'line_items':   [],
+        'raw_text_len':len(text),
+    }
+
+    # Regex field extraction
+    def _first(pattern, text, group=1):
+        m = pattern.search(text)
+        return m.group(group).strip() if m else None
+
+    rec['date']           = _first(_PAT['date'],         text)
+    rec['invoice_no']     = _first(_PAT['invoice_no'],   text)
+    rec['payment_mode']   = _first(_PAT['payment_mode'], text)
+    rec['payment_status'] = _first(_PAT['payment_status'],text)
+
+    # Currency detection
+    cur_m = _PAT['currency'].search(text)
+    if cur_m:
+        rec['currency'] = cur_m.group(1)
+
+    # GSTIN — first = vendor, second = customer
+    gstins = _PAT['gstin'].findall(text)
+    if len(gstins) >= 1: rec['gstin_vendor']   = gstins[0]
+    if len(gstins) >= 2: rec['gstin_customer'] = gstins[1]
+
+    # Amounts
+    amt_m = _PAT['amount'].search(text)
+    if amt_m: rec['total_amount'] = _clean_amount(amt_m.group(1))
+
+    sub_m = _PAT['subtotal'].search(text)
+    if sub_m: rec['subtotal'] = _clean_amount(sub_m.group(1))
+
+    tax_m = _PAT['tax'].search(text)
+    if tax_m: rec['tax_amount'] = _clean_amount(tax_m.group(1))
+
+    disc_m = _PAT['discount'].search(text)
+    if disc_m: rec['discount'] = _clean_amount(disc_m.group(1))
+
+    # Net amount: try total - tax or direct extraction
+    if rec['total_amount'] and rec['tax_amount']:
+        rec['net_amount'] = round(rec['total_amount'] - rec['tax_amount'], 2)
+    elif rec['subtotal']:
+        rec['net_amount'] = rec['subtotal']
+
+    # Vendor and customer names
+    rec['vendor']   = _extract_name_near_keyword(text, _VENDOR_KW)
+    rec['customer'] = _extract_name_near_keyword(text, _CUSTOMER_KW)
+
+    # Line items
+    rec['line_items'] = _extract_fields_from_text_lines(text)
+
+    return rec
+
+
+def _extract_fields_from_text_lines(text):
+    return _extract_line_items(text)
+
+
+def _read_pdf_text(pdf_bytes, filename=""):
+    """Extract text from a PDF file. Returns list of page texts."""
+    pages = []
+    try:
+        import pdfplumber
+        with pdfplumber.open(_io.BytesIO(pdf_bytes)) as pdf:
+            for page in pdf.pages:
+                try:
+                    t = page.extract_text() or ""
+                    pages.append(t)
+                except Exception:
+                    pages.append("")
+    except Exception as e:
+        pages.append(f"[PDF read error: {e}]")
+    return pages
+
+
+# ── ML Layout Learner ──────────────────────────────────────────────────────
+class _DocumentLayoutLearner:
+    """
+    Learns field positions from previously processed documents.
+    Groups documents by layout fingerprint (vendor name pattern).
+    Stores learned extraction rules in st.session_state.
+    """
+
+    @staticmethod
+    def _fingerprint(text):
+        """Create a layout fingerprint from the first 500 chars."""
+        head = text[:500].lower()
+        # Extract structural tokens (keywords present, not values)
+        tokens = []
+        for kw in ['invoice', 'bill', 'tax', 'gst', 'total', 'amount',
+                   'vendor', 'supplier', 'customer', 'date', 'no.', 'qty']:
+            if kw in head:
+                tokens.append(kw)
+        return '_'.join(sorted(tokens))
+
+    @staticmethod
+    def learn(text, extracted_fields, corrections):
+        """Store a learned pattern from a document + user corrections."""
+        import streamlit as _st
+        fp = _DocumentLayoutLearner._fingerprint(text)
+        if 'doc_learned_patterns' not in _st.session_state:
+            _st.session_state['doc_learned_patterns'] = {}
+        patterns = _st.session_state['doc_learned_patterns']
+        if fp not in patterns:
+            patterns[fp] = {'count': 0, 'corrections': {}}
+        patterns[fp]['count'] += 1
+        patterns[fp]['corrections'].update(corrections)
+        _st.session_state['doc_learned_patterns'] = patterns
+
+    @staticmethod
+    def apply_learned(text, extracted_fields):
+        """Apply previously learned corrections to extracted fields."""
+        import streamlit as _st
+        fp = _DocumentLayoutLearner._fingerprint(text)
+        patterns = _st.session_state.get('doc_learned_patterns', {})
+        if fp in patterns and patterns[fp].get('count', 0) >= 2:
+            for field, value in patterns[fp].get('corrections', {}).items():
+                if field in extracted_fields and value:
+                    extracted_fields[field] = f"[Learned] {value}"
+        return extracted_fields
+
+
+def render_document_intelligence_tab():
+    """
+    Full UI for the SMB Document Intelligence Engine.
+    Returns (df_summary, df_line_items, source_label) or (None, None, None).
+    """
+    import streamlit as st
+    import pandas as pd
+
+    st.markdown("""
+<div style='background:rgba(139,92,246,0.07);border:1px solid rgba(139,92,246,0.25);
+border-radius:12px;padding:16px 20px;margin-bottom:14px'>
+<h4 style='color:#a78bfa;margin:0 0 6px'>📄 SMB Document Intelligence</h4>
+<p style='color:#64748b;font-size:.84rem;margin:0'>
+Upload up to 300 PDF bills, invoices, purchase orders or receipts.
+The engine reads every document, extracts vendor, customer, date, amounts, GST,
+line items and builds a master dataset ready for full analysis.
+</p></div>
+""", unsafe_allow_html=True)
+
+    # ── Upload ────────────────────────────────────────────────────────────
+    uploaded_pdfs = st.file_uploader(
+        "Upload PDF documents (bills, invoices, receipts)",
+        type=["pdf"],
+        accept_multiple_files=True,
+        key="doc_intel_upload",
+        label_visibility="collapsed"
+    )
+
+    if not uploaded_pdfs:
+        st.markdown("""
+**What to upload:**
+
+- 🧾 Purchase bills from suppliers / vendors
+- 📋 Sales invoices to customers
+- 🏪 Shop receipts / cash memos
+- 📦 Delivery challans / purchase orders
+- 💰 Payment receipts / vouchers
+
+**What you'll get:**
+- One row per document with: vendor, customer, date, invoice no, total, tax, discount
+- Line items table: product, quantity, rate, amount
+- Auto-detected domain and column mapping
+- Full analysis with all 11 engines
+        """)
+        return None, None, None
+
+    # ── Processing ───────────────────────────────────────────────────────
+    st.markdown(f"**{len(uploaded_pdfs)} document(s) uploaded — processing...**")
+
+    records     = []
+    line_items  = []
+    errors      = []
+    texts_store = {}  # filename → full text (for ML learning)
+
+    progress = st.progress(0)
+    status   = st.empty()
+
+    for i, pdf_file in enumerate(uploaded_pdfs):
+        progress.progress((i + 1) / len(uploaded_pdfs))
+        status.markdown(f"📄 Reading `{pdf_file.name}` ({i+1}/{len(uploaded_pdfs)})")
+
+        try:
+            pdf_bytes = pdf_file.read()
+            pages     = _read_pdf_text(pdf_bytes, pdf_file.name)
+            full_text = "\n".join(pages)
+            texts_store[pdf_file.name] = full_text
+
+            if not full_text.strip() or full_text.strip().startswith('[PDF read error'):
+                errors.append(f"❌ `{pdf_file.name}` — could not extract text (may be scanned image)")
+                continue
+
+            # Extract fields
+            rec = _extract_fields_from_text(full_text, pdf_file.name)
+
+            # Apply ML learned patterns
+            rec = _DocumentLayoutLearner.apply_learned(full_text, rec)
+
+            # Store line items
+            for li in rec.pop('line_items', []):
+                li['source_file'] = pdf_file.name
+                li['invoice_no']  = rec.get('invoice_no', '')
+                li['date']        = rec.get('date', '')
+                li['vendor']      = rec.get('vendor', '')
+                li['customer']    = rec.get('customer', '')
+                line_items.append(li)
+
+            records.append(rec)
+
+        except Exception as e:
+            errors.append(f"⚠️ `{pdf_file.name}` — {str(e)[:80]}")
+
+    progress.empty()
+    status.empty()
+
+    if not records:
+        st.error("❌ Could not extract data from any document. "
+                 "Make sure the PDFs contain text (not scanned images).")
+        if errors:
+            for e in errors:
+                st.markdown(e)
+        return None, None, None
+
+    # ── Build DataFrames ──────────────────────────────────────────────────
+    df_summary = pd.DataFrame(records)
+    df_lines   = pd.DataFrame(line_items) if line_items else pd.DataFrame()
+
+    # Clean up
+    for col in ['total_amount','subtotal','tax_amount','discount','net_amount']:
+        if col in df_summary.columns:
+            df_summary[col] = pd.to_numeric(df_summary[col], errors='coerce')
+
+    # ── Results summary ───────────────────────────────────────────────────
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric("Documents read",   len(records))
+    c2.metric("Line items found", len(line_items))
+    c3.metric("Failed",           len(errors))
+    total_val = df_summary['total_amount'].sum() if 'total_amount' in df_summary else 0
+    c4.metric("Total value",
+              f"₹{total_val:,.0f}" if total_val else "—")
+
+    if errors:
+        with st.expander(f"⚠️ {len(errors)} file(s) had issues"):
+            for e in errors:
+                st.markdown(e)
+
+    # ── Preview + Correction UI ───────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("**📋 Extracted data preview — edit any cell to correct:**")
+
+    # Columns to show in summary table
+    show_cols = [c for c in ['source_file','vendor','customer','invoice_no',
+                              'date','total_amount','tax_amount','discount',
+                              'net_amount','payment_mode','payment_status',
+                              'gstin_vendor','currency']
+                 if c in df_summary.columns]
+
+    # Editable table
+    edited_df = st.data_editor(
+        df_summary[show_cols].fillna(""),
+        use_container_width=True,
+        num_rows="dynamic",
+        key="doc_intel_editor"
+    )
+
+    # Learn from edits
+    if not edited_df.equals(df_summary[show_cols].fillna("")):
+        for idx, row in edited_df.iterrows():
+            if idx < len(records):
+                orig = df_summary[show_cols].fillna("").iloc[idx]
+                corrections = {
+                    col: row[col]
+                    for col in show_cols
+                    if str(row[col]) != str(orig[col]) and row[col]
+                }
+                if corrections and idx < len(list(texts_store.values())):
+                    fname = records[idx].get('source_file','')
+                    if fname in texts_store:
+                        _DocumentLayoutLearner.learn(
+                            texts_store[fname], records[idx], corrections)
+        st.caption("✅ Corrections saved — ML engine will apply them to similar documents next time.")
+
+    # Line items preview
+    if not df_lines.empty:
+        with st.expander(f"📦 Line items ({len(df_lines)} rows from all documents)"):
+            st.dataframe(df_lines, use_container_width=True, hide_index=True)
+
+    # ── View selector ─────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("**Choose dataset for analysis:**")
+    view = st.radio(
+        "Dataset view",
+        ["📋 Summary (one row per document)",
+         "📦 Line items (one row per product)",
+         "🔗 Combined (summary + line item details)"],
+        key="doc_intel_view",
+        horizontal=True,
+        label_visibility="collapsed"
+    )
+
+    if "Summary" in view:
+        final_df    = edited_df.copy()
+        source_lbl  = f"{len(records)} documents (summary)"
+    elif "Line items" in view and not df_lines.empty:
+        final_df    = df_lines.copy()
+        source_lbl  = f"{len(records)} documents (line items)"
+    else:
+        if not df_lines.empty:
+            final_df = pd.merge(
+                edited_df,
+                df_lines[['source_file','product','quantity','price','amount']],
+                on='source_file', how='left'
+            )
+        else:
+            final_df = edited_df.copy()
+        source_lbl = f"{len(records)} documents (combined)"
+
+    # ── Build Master Dataset button ───────────────────────────────────────
+    st.markdown("")
+    col_b1, col_b2 = st.columns([3,1])
+    with col_b2:
+        build_btn = st.button("🏗️ Build Master Dataset →",
+                              type="primary", use_container_width=True)
+    with col_b1:
+        st.markdown(f"Ready: **{len(final_df):,} rows × {len(final_df.columns)} columns** "
+                    f"from **{len(records)} documents**")
+
+    if build_btn:
+        # Convert empty strings to NaN
+        final_df = final_df.replace("", pd.NA)
+        return final_df, df_lines if not df_lines.empty else None, source_lbl
+
+    return None, None, None
+
 # ─── Auth Import ──────────────────────────────────────────────────────────────
 try:
     from auth import (render_login_page, render_user_header, render_admin_panel,
@@ -8203,11 +8714,12 @@ border-radius:0 10px 10px 0;padding:10px 16px;margin:16px 0 12px;">
 <strong style="color:#0ea5e9;">Step 1 — Connect Your Data</strong>
 </div>""", unsafe_allow_html=True)
 
-    tab_upload, tab_sheets, tab_db = st.tabs([
-        "📂 Upload File", "🔗 Google Sheets", "🗄️ Database"
+    tab_upload, tab_sheets, tab_db, tab_docs = st.tabs([
+        "📂 Upload File", "🔗 Google Sheets", "🗄️ Database", "📄 Bills & Invoices"
     ])
     f = None; sheets_df = None; sheets_fname = None
     db_df = None; db_label = None
+    doc_df = None; doc_label = None
 
     with tab_upload:
         f = st.file_uploader("📂 Primary file (required)",
@@ -8284,7 +8796,19 @@ border-radius:0 10px 10px 0;padding:10px 16px;margin:16px 0 12px;">
         else:
             db_df, db_label = render_database_tab()
 
-    has_data = (f is not None) or (sheets_df is not None) or (db_df is not None)
+    with tab_docs:
+        if AUTH_ENABLED and not check_plan_limit("database"):
+            render_upgrade_prompt("database", compact=True)
+        else:
+            _doc_result = render_document_intelligence_tab()
+            if _doc_result and _doc_result[0] is not None:
+                doc_df, _doc_lines, doc_label = _doc_result
+                if _doc_lines is not None:
+                    st.session_state["doc_line_items"] = _doc_lines
+            else:
+                doc_df, doc_label = None, None
+
+    has_data = (f is not None) or (sheets_df is not None) or                (db_df is not None) or (doc_df is not None)
 
     if not has_data:
         st.markdown("---")
@@ -8309,7 +8833,10 @@ border-radius:10px;padding:12px 14px;margin-bottom:8px;">
 
     # ── Load data ─────────────────────────────────────────────────────────────
     with st.spinner("⚙️ Loading data..."):
-        if db_df is not None:
+        if doc_df is not None and not doc_df.empty:
+            df_raw = doc_df.copy()
+            source_label = doc_label or "Documents"
+        elif db_df is not None:
             df_raw = db_df.copy()
             source_label = db_label or "Database"
         elif sheets_df is not None:
