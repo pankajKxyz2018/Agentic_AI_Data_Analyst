@@ -15,6 +15,16 @@ SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "pankajkxyz2018@gmail.com")
 
 # ─── Supabase API Helpers ─────────────────────────────────────────────────────
+def _supabase_available():
+    """Quick check if Supabase is reachable"""
+    try:
+        import requests as _r
+        resp = _r.get(f"{SUPABASE_URL}/auth/v1/health",
+                      headers={"apikey": SUPABASE_ANON_KEY}, timeout=5)
+        return resp.status_code < 500
+    except Exception:
+        return False
+
 def _headers(token=None):
     h = {
         "apikey": SUPABASE_ANON_KEY,
@@ -65,14 +75,22 @@ def sign_in(email, password):
         else:
             return {"success": False, "error": data.get("error_description", "Invalid email or password")}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        err = str(e)
+        if any(k in err for k in ["NameResolution","Failed to resolve","Name or service"]):
+            msg = ("⚠️ Authentication server is temporarily paused. "
+                   "Please wait 2 minutes and refresh the page.")
+        elif "timeout" in err.lower():
+            msg = "⚠️ Connection timed out. Check your internet and try again."
+        else:
+            msg = f"Connection error: {err[:100]}"
+        return {"success": False, "error": msg}
 
 def sign_out(token):
     """Logout user"""
     try:
         requests.post(
             f"{SUPABASE_URL}/auth/v1/logout",
-            headers=_headers(token)
+            headers=_headers(token, timeout=10)
         )
         return True
     except:
@@ -83,7 +101,7 @@ def get_user(token):
     try:
         r = requests.get(
             f"{SUPABASE_URL}/auth/v1/user",
-            headers=_headers(token)
+            headers=_headers(token, timeout=10)
         )
         return r.json()
     except:
@@ -106,7 +124,7 @@ def get_all_users(token):
     try:
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/user_profiles?select=*",
-            headers=_headers(token)
+            headers=_headers(token, timeout=10)
         )
         return r.json()
     except:
@@ -118,7 +136,7 @@ def upsert_profile(token, user_id, data):
         payload = {"id": user_id, **data, "updated_at": datetime.utcnow().isoformat()}
         r = requests.post(
             f"{SUPABASE_URL}/rest/v1/user_profiles",
-            headers={**_headers(token), "Prefer": "resolution=merge-duplicates"},
+            headers={**_headers(token, timeout=10), "Prefer": "resolution=merge-duplicates"},
             json=payload
         )
         return r.status_code in [200, 201]
@@ -146,6 +164,13 @@ def logout():
 # ─── Login Page UI ────────────────────────────────────────────────────────────
 def render_login_page():
     """Full login/signup page with beautiful UI"""
+    if not _supabase_available():
+        st.error("⚠️ Authentication service is temporarily starting up. "
+                 "Please wait 60 seconds and refresh the page.")
+        st.info("The database resumes automatically after a period of "
+                "inactivity. No action needed — just refresh in 1 minute.")
+        st.markdown("Need help? Email **pankaj@1clickdataanalysis.com**")
+        return
 
     st.markdown("""
     <style>
