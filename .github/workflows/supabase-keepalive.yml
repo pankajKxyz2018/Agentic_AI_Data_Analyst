@@ -1,37 +1,16 @@
 name: Supabase keepalive
 on:
   schedule:
-    - cron: '0 9 * * 1,4'   # Every Monday + Thursday at 9am UTC
-  workflow_dispatch:          # Manual trigger from GitHub UI
+    - cron: '0 8 * * 1,4'
+  workflow_dispatch:
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
       - name: Ping Supabase
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
-          node -e "
-          const https = require('https');
-          const url = new URL('/rest/v1/users?select=id&limit=1', process.env.SUPABASE_URL);
-          const options = {
-            hostname: url.hostname,
-            path: url.pathname + url.search,
-            method: 'GET',
-            headers: {
-              'apikey': process.env.SUPABASE_KEY,
-              'Authorization': 'Bearer ' + process.env.SUPABASE_KEY
-            }
-          };
-          const req = https.request(options, (res) => {
-            console.log('Status:', res.statusCode);
-            console.log('Supabase pinged successfully - project stays active');
-          });
-          req.on('error', (e) => {
-            console.error('Error:', e.message);
-            process.exit(1);
-          });
-          req.end();
-          "
+          curl -s "${{ secrets.SUPABASE_URL }}/rest/v1/" \
+            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -o /dev/null -w "Status: %{http_code}\n"
+          echo "Supabase pinged — project stays active"
