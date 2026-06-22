@@ -20,7 +20,7 @@ def _supabase_available():
     try:
         import requests as _r
         resp = _r.get(f"{SUPABASE_URL}/auth/v1/health",
-                      headers={"apikey": SUPABASE_ANON_KEY}, timeout=5)
+                      headers={"apikey": SUPABASE_ANON_KEY}, timeout=3)
         return resp.status_code < 500
     except Exception:
         return False
@@ -164,13 +164,8 @@ def logout():
 # ─── Login Page UI ────────────────────────────────────────────────────────────
 def render_login_page():
     """Full login/signup page with beautiful UI"""
-    if not _supabase_available():
-        st.error("⚠️ Authentication service is temporarily starting up. "
-                 "Please wait 60 seconds and refresh the page.")
-        st.info("The database resumes automatically after a period of "
-                "inactivity. No action needed — just refresh in 1 minute.")
-        st.markdown("Need help? Email **pankaj@1clickdataanalysis.com**")
-        return
+    # No upfront Supabase health check — that caused 3-5s delay and blocked the page
+    # Errors are shown AFTER a failed login attempt via sign_in() return value
 
     st.markdown("""
     <style>
